@@ -4,8 +4,8 @@ COSR - IRCCS San Raffaele
 R code for master thesis analyses of spatial transcriptomic data (Visium)
 
 R scripts:
-- RCTD_deconvolution.R
-- SpatialPCA_dim_reduction.R
+- deconvolution_RCTD.R
+- SpatialPCA_dimred.R
 
 html:
 - Quality (host + pathogen)
