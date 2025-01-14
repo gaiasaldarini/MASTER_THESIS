@@ -1,0 +1,835 @@
+---
+title: "new"
+author: "Gaia Saldarini"
+date: "2024-10-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## LIBRARY & COLORS
+
+```{r}
+#sessionInfo()
+#packageVersion("Seurat")
+#packageVersion("spacexr")
+#packageVersion("clusterProfiler")
+#packageVersion("SpatialPCA")
+#packageVersion("igraph")
+#packageVersion("harmony")
+#packageVersion("ggplot2")
+```
+
+```{r,  message=FALSE, warning = FALSE}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(stringr)
+library(ggrepel)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggsignif)
+library(readr)
+library(spacexr)
+library(scatterpie)
+library(pheatmap)
+library(SpatialPCA)
+library(glmGamPoi)
+library(harmony)
+library(presto)
+library(igraph)
+library(plotly)
+```
+
+```{r}
+path = "/beegfs/scratch/ric.hsr/Gaia_saldarini/FINAL/"
+```
+
+```{r}
+samples_tot = c("A1", "B1", "A3", "C1", "D1", "C2", "D2", "B3", "C3", "D3")
+
+reds = brewer.pal(7, "Reds")
+blues = brewer.pal(3, "Blues")
+cols_samples_tot = c(blues, reds)
+names(cols_samples_tot) = samples_tot
+```
+
+## DATA
+
+```{r, warning = FALSE}
+# le old allineate sul nuovo genoma (con le 67 probes) sono in /beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lorè/LORE_probe/old_slice
+# maschere già messe
+
+slice_1_ctrl = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe/old_slice/A11SPA/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "A1",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+slice_2_ctrl = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe/old_slice/V12N16307B1_noair/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "B1",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+slice_3_dual = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe/old_slice/V12N16307C1_noair/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "C1",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+slice_4_dual = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe/old_slice/D16SPA/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "D1",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+slice_5_dual = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe/old_slice/A16SPA/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "C2",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+slice_6_dual = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe/old_slice/C16SPAL/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "D2",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+```
+
+```{r, warning = FALSE}
+# nuove
+
+AB = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe2/AB/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "A3",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+AS = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe2/AS/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "A3",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+B = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe2/B1/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "B3",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+CB = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe2/CB/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "C3",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+CS = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe2/CS/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "C3",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+DB = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe2/DB/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "D3",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+
+DS = Load10X_Spatial(
+  data.dir = "/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe2/DS/outs",
+  filename = "raw_feature_bc_matrix.h5",
+  assay = "Spatial",
+  slice = "D3",
+  filter.matrix = TRUE,
+  to.upper = FALSE,
+  image = NULL
+)
+```
+
+```{r, warning = FALSE}
+# B = beads
+# S = surnatant
+# 2 different sequencings
+
+unify_B_S = function(a, b){
+  # controllo che stessi pixel, altrimenti prendo quelli in comune
+    common_pixels = intersect(colnames(a), colnames(b))
+    common_genes = intersect(rownames(a), rownames(b))
+    a = a[common_genes, common_pixels]
+    b = b[common_genes, common_pixels]
+  
+  a@assays$Spatial$counts = a@assays$Spatial$counts + b@assays$Spatial$counts
+  a$nCount_Spatial = colSums(a@assays$Spatial$counts)
+  a$nFeature_Spatial = colSums(a@assays$Spatial$counts > 0)
+  return (a)
+} 
+
+
+slide_A = unify_B_S(AB, AS)
+slide_B = B
+slide_C = unify_B_S(CB, CS)
+slide_D = unify_B_S(DB, DS)
+
+```
+
+```{r, warning = FALSE}
+# prendere solo pixels dove c'è tessuto e trascrittomica
+
+slice_1_ctrl = slice_1_ctrl[, rownames(GetTissueCoordinates(slice_1_ctrl))]
+slice_2_ctrl = slice_2_ctrl[, rownames(GetTissueCoordinates(slice_2_ctrl))]
+slice_3_dual = slice_3_dual[, rownames(GetTissueCoordinates(slice_3_dual))]
+slice_4_dual = slice_4_dual[, rownames(GetTissueCoordinates(slice_4_dual))]
+slice_5_dual = slice_5_dual[, rownames(GetTissueCoordinates(slice_5_dual))]
+slice_6_dual = slice_6_dual[, rownames(GetTissueCoordinates(slice_6_dual))]
+slide_A = slide_A[, rownames(GetTissueCoordinates(slide_A))]
+slide_B = slide_B[, rownames(GetTissueCoordinates(slide_B))]
+slide_C = slide_C[, rownames(GetTissueCoordinates(slide_C))]
+slide_D = slide_D[, rownames(GetTissueCoordinates(slide_D))]
+
+```
+
+
+```{r}
+# MASCHERE (i vecchi le hanno già)
+# da terminale nella cartella dove ci sono le cartelle di maschere: /beegfs/scratch/ric.cirillo.transcriptomics/saldarini.gaia/A1-1SPA_30724/
+
+#for i in *.json; do cat ${i} |sed 's/},{/\n/g' | grep "tissue" | cut -f3,4 -d ',' | sed 's/"row"://g;s/,.*:/\t/g' | awk '{print $2+1, $1+1}' > ${i}.tab; done
+
+# questo crea nella cartella dove c'è il json un file json.tab con riga e colonna dei pixel validi. confronto con space ranger coordinates e tengo solo quelle valide con filtro
+```
+
+```{r,  message=FALSE, warning = FALSE}
+read_delim('/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe/analysis/visium-v2_coordinates.txt',delim='\t',col_names = c('barcode','col','row'))->barcodes
+
+read_delim("/beegfs/scratch/ric.cirillo.transcriptomics/saldarini.gaia/airways_masks_mouse_new/V13F06-008-A1_noairways.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+
+selected_barcodes = as.list(selected_barcodes)
+selected_barcodes = lapply(selected_barcodes, function(x) paste0(x, "-1"))
+selected_barcodes = unlist(selected_barcodes)
+
+dim(slide_A)[2]
+length(selected_barcodes)
+
+slide_A <- slide_A[,selected_barcodes]
+```
+
+```{r,  message=FALSE, warning = FALSE}
+read_delim("/beegfs/scratch/ric.cirillo.transcriptomics/saldarini.gaia/airways_masks_mouse_new/V13F06-008-B1_noairways.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+
+selected_barcodes = as.list(selected_barcodes)
+selected_barcodes = lapply(selected_barcodes, function(x) paste0(x, "-1"))
+selected_barcodes = unlist(selected_barcodes)
+
+dim(slide_B)[2]
+length(selected_barcodes)
+
+slide_B <- slide_B[,selected_barcodes]
+```
+
+```{r,  message=FALSE, warning = FALSE}
+read_delim("/beegfs/scratch/ric.cirillo.transcriptomics/saldarini.gaia/airways_masks_mouse_new/V13F06-008-C1_noairways.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+
+selected_barcodes = as.list(selected_barcodes)
+selected_barcodes = lapply(selected_barcodes, function(x) paste0(x, "-1"))
+selected_barcodes = unlist(selected_barcodes)
+
+dim(slide_C)[2]
+length(selected_barcodes)
+
+slide_C <- slide_C[,selected_barcodes]
+```
+
+```{r,  message=FALSE, warning = FALSE}
+read_delim("/beegfs/scratch/ric.cirillo.transcriptomics/saldarini.gaia/airways_masks_mouse_new/V13F06-008-D1_noairways.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+
+selected_barcodes = as.list(selected_barcodes)
+selected_barcodes = lapply(selected_barcodes, function(x) paste0(x, "-1"))
+selected_barcodes = unlist(selected_barcodes)
+
+dim(slide_D)[2]
+length(selected_barcodes)
+
+slide_D <- slide_D[,selected_barcodes]
+```
+```{r}
+dim(GetTissueCoordinates(slice_3_dual))
+dim(slice_3_dual@images$C1@coordinates)
+# tutte le coordinate sono già filtrate
+```
+
+```{r}
+colnames(slice_1_ctrl) = paste0(colnames(slice_1_ctrl), "_", "A1")
+colnames(slice_2_ctrl) = paste0(colnames(slice_2_ctrl), "_", "B1")
+colnames(slice_3_dual) = paste0(colnames(slice_3_dual), "_", "C1")
+colnames(slice_4_dual) = paste0(colnames(slice_4_dual), "_", "D1")
+colnames(slice_5_dual) = paste0(colnames(slice_5_dual), "_", "C2")
+colnames(slice_6_dual) = paste0(colnames(slice_6_dual), "_", "D2")
+colnames(slide_A) = paste0(colnames(slide_A), "_", "A3")
+colnames(slide_B) = paste0(colnames(slide_B), "_", "B3")
+colnames(slide_C) = paste0(colnames(slide_C), "_", "C3")
+colnames(slide_D) = paste0(colnames(slide_D), "_", "D3")
+```
+
+```{r}
+slices_list = list("A1" = slice_1_ctrl, "B1" = slice_2_ctrl,  "A3" = slide_A, "C1" = slice_3_dual, "D1" = slice_4_dual, "C2" = slice_5_dual, "D2" = slice_6_dual, "B3" = slide_B, "C3" = slide_C, "D3" = slide_D)
+
+for (i in 1:10){
+  slices_list[[i]]$orig.ident = names(slices_list)[i]
+}
+
+```
+
+```{r}
+slices_merged = merge(slices_list[[1]], y = c(slices_list[[2]], slices_list[[3]], slices_list[[4]], slices_list[[5]], slices_list[[6]], slices_list[[7]], slices_list[[8]], slices_list[[9]], slices_list[[10]]))
+slices_merged$orig.ident = substr(colnames(slices_merged), nchar(colnames(slices_merged))-1, nchar(colnames(slices_merged)))
+slices_merged$orig.ident = factor(slices_merged$orig.ident, levels = names(cols_samples_tot))
+Idents(slices_merged) = slices_merged$orig.ident
+table(slices_merged$orig.ident)
+```
+```{r}
+slices_merged$batch = as.factor(substr(colnames(slices_merged), nchar(colnames(slices_merged)), nchar(colnames(slices_merged))))  # ultime lettere delle colnames
+table(slices_merged$batch)
+
+n_slices = length(slices_list)
+for (i in 1:n_slices){
+  slices_list[[i]]$batch = as.factor(substr(colnames(slices_list[[i]]), nchar(colnames(slices_list[[i]])), nchar(colnames(slices_list[[i]]))))
+}
+```
+```{r, fig.height=10, fig, width = 5}
+SpatialDimPlot(slices_merged, ncol = 5, alpha = 0) & NoLegend() + theme(plot.title = element_text(size = 22))
+
+```
+
+```{r, fig.height=10, fig, width = 5}
+SpatialDimPlot(slices_merged, cols = cols_samples_tot, ncol = 5) & NoLegend()
+ggsave(paste0(path, "quality/q00.png"), width = 10, height = 5)
+```
+
+```{r}
+
+saveRDS(slices_merged, paste0(path, "data/slices_merged_unfiltered.rds"))
+saveRDS(slices_list, paste0(path, "data/slices_list_unfiltered.rds"))
+```
+
+## QUALITY 
+
+Applicare sia su list, sia su merged
+
+```{r}
+MABS_genes = read.csv("/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe2/MABS_genes", sep = " ", header = FALSE)
+MABS_genes = MABS_genes$V2
+MABS_genes = unlist(lapply(MABS_genes, function(x) {gsub("_", "-", x)}))
+MABS_genes = c(unique(MABS_genes), "MAB-3731c", "MAB-4532c")
+MABS_genes = setdiff(MABS_genes, "rrs")
+write.csv(MABS_genes, paste0(path, "/data/MABS_genes.csv"), row.names = FALSE) 
+# ricordarsi di aggiungere rrs se servisse
+
+length(MABS_genes)
+```
+
+```{r, warning = FALSE}
+n_slices = 10
+for (i in 1:n_slices){
+  # filtro su geni dell'host
+  genes_filtered = rownames(slices_list[[i]])[rowSums(slices_list[[i]]@assays$Spatial$counts)>2] # filtro genes: detected in at least 3 cells
+  # aggiungo MABS, perchè c'è il rischio di averli persi con il filtro
+  genes_filtered = unique(c(genes_filtered, MABS_genes))
+  slices_list[[i]] =slices_list[[i]][genes_filtered,]
+  # no filtro su spots a priori 
+}
+
+```
+
+```{r}
+gene_list <- lapply(slices_list, function(x) rownames(x))
+total_genes <- Reduce(intersect, gene_list)
+total_genes = unique(total_genes)
+length(total_genes)
+slices_merged = slices_merged[total_genes, ]
+
+host_genes = setdiff(total_genes, MABS_genes)
+host_genes[startsWith(host_genes, "MAB-")]
+length(host_genes)
+write.csv(host_genes, paste0(path, "/data/host_genes.csv"), row.names = FALSE) 
+
+```
+
+```{r}
+mt_genes = c("Mtif2", "Mto1", "Mterf2", "Mtres1", "Mtg1", "Mtg2", "Mtch1", "Mtrf1l", "Mtfmt", "Mtrf1", "Mtfp1", "Mtpap", "Mterf4", "Mtif3", "Mtfr1", "Mterf3", "Mtarc1", "Mterf1b", "Mtx3", "Mterf1a", "Mtfr2")
+mt_genes = total_genes[na.omit(match(mt_genes, total_genes))]
+write.csv(mt_genes, paste0(path, "/data/mt_genes.csv"), row.names = FALSE)
+```
+
+```{r}
+MABS_genes = read.csv(paste0(path, "/data/MABS_genes.csv"))[[1]]
+host_genes = read.csv(paste0(path, "/data/host_genes.csv"))[[1]]
+mt_genes = read.csv(paste0(path, "/data/mt_genes.csv"))[[1]]
+```
+
+```{r}
+# before filtering
+num_spots = sapply(slices_list, ncol)
+```
+
+```{r}
+n_slices = length(slices_list)
+
+# nFeatures 
+# nCounts
+# % mitochondrial
+# scatterplot nCounts % mitochondrial
+
+for (i in 1:n_slices){
+  slices_list[[i]][["percent.mt"]] <- PercentageFeatureSet(slices_list[[i]], features = mt_genes)
+}
+
+slices_merged[["percent.mt"]] <- PercentageFeatureSet(slices_merged, features = mt_genes)
+```
+
+```{r, fig.height = 9, fig.width = 4, warning = FALSE, message = FALSE}
+
+VlnPlot(slices_merged, features = c("nFeature_Spatial", "nCount_Spatial", "percent.mt"), pt.size=0, add.noise = TRUE, split.by = "orig.ident", cols = cols_samples_tot, ncol = 1) & theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) & geom_hline(yintercept = 0.2, color = "red") 
+ggsave(paste0(path, "quality/q0.png"), width = 4, height = 9)
+```
+
+```{r, fig.height=6, fig.width = 10}
+SpatialFeaturePlot(slices_merged, features = "nCount_Spatial", ncol = 5, min.cutoff = 2000, max.cutoff = 70000) +  plot_layout(guides = "collect") &
+  guides(fill = guide_colorbar(direction = "vertical"))
+ggsave(paste0(path, "quality/q1.png"), width = 10, height = 6)
+```
+```{r, fig.height=6, fig.width = 10}
+SpatialFeaturePlot(slices_merged, features = "nFeature_Spatial", ncol = 5, min.cutoff = 2000, max.cutoff = 11000) +  plot_layout(guides = "collect" ) &
+  guides(fill = guide_colorbar(direction = "vertical")) 
+ggsave(paste0(path, "quality/q2.png"), width = 10, height = 6)
+```
+```{r, fig.height=6, fig.width = 10}
+SpatialFeaturePlot(slices_merged, features = "percent.mt", ncol = 5, min.cutoff = 0, max.cutoff = 0.4) +  plot_layout(guides = "collect") &
+  guides(fill = guide_colorbar(direction = "vertical"))
+ggsave(paste0(path, "quality/q3.png"), width = 10, height = 6)
+```
+
+```{r, message = FALSE}
+FeatureScatter(slices_merged, feature1 = "nCount_Spatial", feature2 = "percent.mt", cols = cols_samples_tot) + geom_hline(yintercept = 0.2, color = "red")
+ggsave(paste0(path, "quality/q4.png"))#, width = 10, height = 10)
+FeatureScatter(slices_merged, feature1 = "nCount_Spatial", feature2 = "nFeature_Spatial", cols = cols_samples_tot)
+ggsave(paste0(path, "quality/q5.png"))#, width = 10, height = 10)
+```
+
+
+```{r, warning=FALSE}
+for (i in 1:n_slices){
+  #print(dim(slices_list[[i]]))
+  slices_list[[i]] = subset(slices_list[[i]], subset = percent.mt < 0.2)      # filter cells with percent mt >=0.2: threshold 0.2 da scatterplot
+  #print(dim(slices_list[[i]]))
+}
+
+slices_merged = subset(slices_merged, subset = percent.mt < 0.2)
+```
+
+D2
+
+```{r, message = FALSE}
+png(paste0(path, "quality/q6.png"))
+hist(slices_list[["D2"]]$nCount_Spatial, breaks = 70, main = "D2 counts per spot distribution")
+abline(v = 10000, col = "red", lwd = 2)
+text(x = 15000, y = 300, labels = "10k", col = "red", pos = 3)
+dev.off()
+
+table(slices_list[["D2"]]$nCount_Spatial > 10000)
+
+slices_list[["D2"]]$quality = "good_quality"
+slices_list[["D2"]]$quality[slices_list[["D2"]]$nCount_Spatial < 10000] = "low_quality"
+col_quality = c("green3", "red3")
+names(col_quality) = c("good_quality", "low_quality")
+SpatialDimPlot(slices_list[["D2"]], group.by = "quality", cols = col_quality, alpha = 0.5)
+ggsave(paste0(path, "quality/q7.png"))
+SpatialDimPlot(slices_list[["D2"]][, slices_list[["D2"]]$nCount_Spatial > 10000]) & NoLegend()
+ggsave(paste0(path, "quality/quality_D2_filter.png"))
+```
+
+```{r}
+D2_low_quality = colnames(slices_list[["D2"]])[slices_list[["D2"]]$nCount_Spatial < 10000]
+#length(D2_low_quality)
+write.csv(D2_low_quality, paste0(path, "data/D2_low_quality.csv"), row.names = FALSE)
+```
+```{r, warning=FALSE}
+slices_list[["D2"]] = slices_list[["D2"]][,! (colnames(slices_list[["D2"]]) %in% D2_low_quality)]
+slices_merged = slices_merged[,! (colnames(slices_merged) %in% D2_low_quality)]
+```
+
+
+```{r}
+perc_removed = NULL
+for (i in 1:n_slices){
+  perc_removed[i] = (num_spots[i] - ncol(slices_list[[i]]))/num_spots[i]
+}
+perc_removed
+```
+
+## BEADS
+
+```{r,  message=FALSE, warning = FALSE}
+read_delim('/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/LORE_probe/analysis/visium-v2_coordinates.txt',delim='\t',col_names = c('barcode','col','row'))->barcodes
+
+```
+
+```{r,  message=FALSE, warning = FALSE}
+read_delim("/beegfs/scratch/ric.hsr/Gaia_saldarini/new_slices_10/beads/V12N16-307-C1_.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+selected_barcodes_C1 = paste0(selected_barcodes, "-1_C1")
+```
+
+```{r, message=FALSE, warning = FALSE}
+read_delim("/beegfs/scratch/ric.hsr/Gaia_saldarini/new_slices_10/beads/V12N16-307-D1_.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+selected_barcodes_D1 = paste0(selected_barcodes, "-1_D1")
+```
+
+```{r,  message=FALSE, warning = FALSE}
+read_delim("/beegfs/scratch/ric.hsr/Gaia_saldarini/new_slices_10/beads/V13J17-404_A1airwaysinflamed.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+selected_barcodes_C2 = paste0(selected_barcodes, "-1_C2")
+```
+
+```{r,  message=FALSE, warning = FALSE}
+read_delim("/beegfs/scratch/ric.hsr/Gaia_saldarini/new_slices_10/beads/V13J17-404_C1airwaysinflamed.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+selected_barcodes_D2 = paste0(selected_barcodes, "-1_D2")
+```
+
+```{r, message=FALSE, warning = FALSE}
+read_delim("/beegfs/scratch/ric.hsr/Gaia_saldarini/new_slices_10/beads/V13F06-008_B1airwaysinflamed.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+selected_barcodes_B3 = paste0(selected_barcodes, "-1_B3")
+```
+
+```{r,  message=FALSE, warning = FALSE}
+read_delim("/beegfs/scratch/ric.hsr/Gaia_saldarini/new_slices_10/beads/V13F06-008_C1airwaysinflamed.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+selected_barcodes_C3 = paste0(selected_barcodes, "-1_C3")
+```
+
+```{r,  message=FALSE, warning = FALSE}
+read_delim("/beegfs/scratch/ric.hsr/Gaia_saldarini/new_slices_10/beads/V13F06-008_D1airwaysinflamed.json.tab",delim=' ',col_names = c('col','row')) %>% 
+  left_join(barcodes) %>% 
+  pull(barcode)->selected_barcodes
+selected_barcodes_D3 = paste0(selected_barcodes, "-1_D3")
+```
+
+```{r, fig.height=6, fig.width = 10, warning=FALSE}
+
+selected_barcodes = c(selected_barcodes_C1, selected_barcodes_D1, selected_barcodes_C2, selected_barcodes_D2, selected_barcodes_B3, selected_barcodes_C3, selected_barcodes_D3)
+slices_merged$beads = "Tissue"
+slices_merged$beads[selected_barcodes] = "Airways_containing_beads"
+
+cols_beads = c("green", "darkblue")
+names(cols_beads) = c("Tissue", "Airways_containing_beads")
+
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+SpatialDimPlot(slices_merged, group.by = "beads",  ncol = 5, alpha = 0.35,  cols = cols_beads) +  plot_layout(guides = "collect")
+ggsave(paste0(path, "quality/beads_7.png"), height = 6, width = 10)
+```
+```{r}
+sel_barcodes_list = list(selected_barcodes_C1, selected_barcodes_D1, selected_barcodes_C2, selected_barcodes_D2, selected_barcodes_B3, selected_barcodes_C3, selected_barcodes_D3)
+#length(sel_barcodes_list)
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+
+for (i in 1:7){
+  slices_list[[samples_infected[[i]]]]$beads = "Tissue"
+  slices_list[[samples_infected[[i]]]]$beads[sel_barcodes_list[[i]]] = "Airways_containing_beads"
+}
+```
+
+```{r}
+write.csv(selected_barcodes, paste0(path, "data/beads.csv"), row.names = FALSE)
+```
+
+```{r}
+for (i in 1:length(slices_list)){
+  slices_list[[i]]$condition = as.factor(ifelse(slices_list[[i]]$orig.ident %in% samples_infected, "Infected", "Ctrl"))
+}
+slices_merged$condition = as.factor(ifelse(slices_merged$orig.ident %in% samples_infected, "Infected", "Ctrl"))
+```
+
+## MABS
+
+```{r}
+MABS_genes = read.csv(paste0(path, "/data/MABS_genes.csv"))[[1]]
+
+slices_merged = JoinLayers(slices_merged)
+slices_merged$rpoB_counts = slices_merged[["Spatial"]]$counts["rpoB", ]
+slices_merged$lsr2_counts = slices_merged[["Spatial"]]$counts["MAB-0545", ]
+slices_merged$MABS_presence = ifelse((slices_merged$rpoB_counts + slices_merged$lsr2_counts) > 0, 
+                                     "MABS", "no_mabs")
+slices_merged$MABS_type = ifelse(slices_merged$MABS_presence == "no_mabs", "no_mabs", 
+                                 ifelse(slices_merged$lsr2_counts > 0, "lsr2+", "lsr2-"))
+slices_merged$MABS_tot = ifelse(colSums(slices_merged[["Spatial"]]$counts[MABS_genes, ]) > 0, "MABS", "no_mabs")
+
+for (i in 4:length(slices_list)){
+  slices_list[[i]]$rpoB_counts = slices_list[[i]][["Spatial"]]$counts["rpoB", ]
+  slices_list[[i]]$lsr2_counts = slices_list[[i]][["Spatial"]]$counts["MAB-0545", ]
+  slices_list[[i]]$MABS_presence = ifelse((slices_list[[i]]$rpoB_counts + slices_list[[i]]$lsr2_counts) > 0, 
+                                       "MABS", "no_mabs")
+  slices_list[[i]]$MABS_type = ifelse(slices_list[[i]]$MABS_presence == "no_mabs", "no_mabs", 
+                                   ifelse(slices_list[[i]]$lsr2_counts > 0, "lsr2+", "lsr2-"))
+  slices_list[[i]]$MABS_tot = ifelse(colSums(slices_list[[i]][["Spatial"]]$counts[MABS_genes, ]) > 0, "MABS", "no_mabs")
+}
+
+
+```
+
+```{r}
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+cols_samples = rep("red2", 7) #brewer.pal(7, "Reds")
+names(cols_samples) = samples_infected
+```
+
+```{r}
+cols_geni_batterici = c("#D95F02","#1B9E77", "lavenderblush1")
+names(cols_geni_batterici) = c("lsr2+", "lsr2-", "no_mabs")
+
+cols_mabs = c("firebrick3", "lavenderblush1")
+names(cols_mabs) = c("MABS", "no_mabs")
+
+cols_rpoB_lsr2 = c("#D95F02","#1B9E77")
+names(cols_rpoB_lsr2) = c("lsr2", "rpoB")
+```
+
+### DISTRIBUTION 
+
+```{r, warning = FALSE}
+infected = slices_merged[, slices_merged$condition == "Infected"]
+```
+
+```{r, fig.height=10, fig.width=10}
+SpatialDimPlot(infected, group.by = "MABS_presence", ncol = 2, cols = cols_mabs) +  plot_layout(guides = "collect")
+ggsave(paste0(path, "img/MABS_1.png"), height=10, width=10)
+SpatialDimPlot(infected, group.by = "MABS_type", ncol = 2,  cols = cols_geni_batterici) +  plot_layout(guides = "collect")
+ggsave(paste0(path, "img/MABS_2.png"), height=10, width=10)
+
+
+SpatialDimPlot(infected, group.by = "MABS_tot", ncol = 2, cols = cols_mabs) +  plot_layout(guides = "collect")
+```
+
+```{r, warning = FALSE}
+
+df_mabs = data.frame()
+df_mabs_ratio = data.frame()
+for (i in 1: length(samples_infected)){
+  xx = infected[, infected$orig.ident == samples_infected[i]]
+  r = data.frame("number_spots" = sum(xx$rpoB_counts > 0), "gene" = "rpoB", "sample" = samples_infected[i], "counts" = sum(xx$rpoB_counts), "number_spots_lsr2" = sum(xx$MABS_type == "lsr2-"), "perc_spots" = sum(xx$rpoB_counts > 0)/length(xx$rpoB_counts))
+  l = data.frame("number_spots" = sum(xx$lsr2_counts > 0), "gene" = "lsr2", "sample" = samples_infected[i], "counts" = sum(xx$lsr2_counts), "number_spots_lsr2" = sum(xx$MABS_type == "lsr2+"), "perc_spots" = sum(xx$lsr2_counts > 0)/length(xx$lsr2_counts))
+	df_mabs = rbind(df_mabs, rbind(r, l))
+	
+	ratio_rpoB_lsr2 = data.frame("spots_ratio" = r$number_spots/l$number_spots, "sample" = samples_infected[i], "counts_ratio" = r$counts/l$counts, "spots_ratio_lsr2" = r$number_spots_lsr2/l$number_spots_lsr2)
+	df_mabs_ratio = rbind(df_mabs_ratio, ratio_rpoB_lsr2)
+}
+	
+
+df_mabs$gene = factor(df_mabs$gene, levels = names(cols_rpoB_lsr2))
+df_mabs$sample = factor(df_mabs$sample, levels = samples_infected)
+df_mabs_ratio$sample = factor(df_mabs_ratio$sample, levels = samples_infected)
+```
+
+```{r}
+
+ggplot(data=df_mabs, aes(x = sample, y=number_spots, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("# of spots") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2)
+ggsave(paste0(path, "img/MABS_3.png"))#, height=10, width=10)
+
+ggplot(data=df_mabs, aes(x=sample, y=perc_spots, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("% of spots per slice") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2)
+ggsave(paste0(path, "img/MABS_4.png"))
+
+ggplot(data=df_mabs, aes(x = sample, y=counts, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("# of counts") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2)
+ggsave(paste0(path, "img/MABS_6.png"))#, height=10, width=10)
+
+ggplot(data=df_mabs, aes(x = sample, y=number_spots_lsr2, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("# of spots lsr2+-") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2)
+ggsave(paste0(path, "img/MABS_6.png"))#, height=10, width=10)
+
+
+```
+
+```{r}
+ggplot(data=df_mabs_ratio, aes(x=sample, y=spots_ratio)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("spots ratio") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("rpoB/lsr2 number of spots")
+ggsave(paste0(path, "img/MABS_5.png"))
+
+ggplot(data=df_mabs_ratio, aes(x=sample, y=counts_ratio)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("counts ratio") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("rpoB/lsr2 number of spots")
+ggsave(paste0(path, "img/MABS_5.png"))
+
+ggplot(data=df_mabs_ratio, aes(x=sample, y=spots_ratio_lsr2)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("spots ratio lsr2-/lsr2+") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("rpoB/lsr2 number of spots")
+ggsave(paste0(path, "img/MABS_5.png"))
+```
+
+```{r, warning=FALSE}
+df = data.frame()
+for (i in 4:length(slices_list)){
+  x = slices_list[[i]]
+  rpoB = sum(x$rpoB_counts)
+  lsr2 = sum(x$lsr2_counts)
+  rpoB_p = sum(x$rpoB_counts>0)
+  lsr2_p = sum(x$lsr2_counts>0)
+  mabs = rpoB+lsr2
+  mabs_p = sum(x$MABS_presence == "MABS")
+  ratio = rpoB/lsr2  #counts
+  ratio_spots = rpoB_p/lsr2_p 
+  ratio_spots_lsr2 = sum(x$MABS_type == "lsr2-")/sum(x$MABS_type == "lsr2+")
+  spots = (mabs_p)/dim(x)[2] *100
+  df = rbind(df, c(rpoB, lsr2, mabs, mabs_p, ratio, ratio_spots, ratio_spots_lsr2, spots))
+}
+colnames(df) = c("rpoB_umi", "lsr2_umi", "mabs_umi", "mabs_spots", "ratio_counts", "ratio_spots", "ratio_spots_lsr2", "mabs_spots_%")
+rownames(df) = samples_infected
+df
+```
+
+## deconvolution
+
+```{r}
+list_deconvolution = readRDS(paste0(path, "data/deconvolution_list.rds"))
+```
+
+```{r, warning = FALSE}
+
+for (i in 1:10){
+  slices_list[[samples_tot[i]]][["RCTD"]] = CreateAssayObject(data = list_deconvolution[[samples_tot[i]]][["RCTD"]]$data[, colnames(slices_list[[samples_tot[i]]])])
+}
+  
+celltypes_list <- lapply(list_deconvolution, function(df) {
+  df[["RCTD"]]$data
+})
+
+rctd_tot <- do.call(cbind, celltypes_list)
+dim(rctd_tot)
+dim(slices_merged)
+slices_merged[["RCTD"]] = CreateAssayObject(data = rctd_tot[, colnames(slices_merged)])
+
+```
+
+```{r}
+cell_types = rownames(slices_merged[["RCTD"]]$data)
+
+for (j in 1:length(cell_types)){
+  slices_merged@meta.data[[cell_types[j]]] = t(slices_merged[["RCTD"]]$data)[colnames(slices_merged), cell_types[j]]
+}
+
+for (i in 1:10){
+  for (j in 1:length(cell_types)){
+  slices_list[[i]]@meta.data[[cell_types[j]]] = t(slices_list[[i]][["RCTD"]]$data)[colnames(slices_list[[i]]), cell_types[j]]
+  }
+}
+
+```
+
+```{r}
+saveRDS(slices_list, paste0(path, "data/slices_list.rds"))   
+#slices_list = readRDS(paste0(path, "data/slices_list.rds"))
+
+saveRDS(slices_merged, paste0(path, "data/slices_merged.rds"))
+#slices_merged = readRDS(paste0(path, "data/slices_merged.rds"))
+```
+

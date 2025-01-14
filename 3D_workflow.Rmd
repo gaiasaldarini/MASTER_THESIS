@@ -1,0 +1,1876 @@
+---
+title: "num_3"
+author: "Gaia Saldarini"
+date: "2024-10-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## LIBRARY & COLORS
+
+```{r, echo=FALSE, message=FALSE, warning = FALSE}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(stringr)
+library(ggrepel)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggsignif)
+library(readr)
+library(spacexr)
+library(scatterpie)
+library(pheatmap)
+library(SpatialPCA)
+library(glmGamPoi)
+library(harmony)
+#install.packages('devtools')
+#devtools::install_github('immunogenomics/presto')
+library(presto)
+library(igraph)
+library(plotly)
+library(ggpubr)
+library(tidyr)
+library(tibble)
+```
+
+```{r}
+path = "/beegfs/scratch/ric.hsr/Gaia_saldarini/FINAL/"
+```
+
+```{r}
+cols_celltypes <- c(
+        "Alveolar epithelial cells" = "#780116",
+        "Club cells" = "#f7b538",
+        "Fibroblast" = "red",
+        "Endothelial cells" = "yellow",
+        
+        "Monocytes" = "#a9d6e5",
+        "Macrophages" = "#0496ff",
+        "Dendritic cells" = "blue",
+        "Neutrophils" = "#7DF3FF",
+        
+        "B cells" = "black",
+        "T cells" = "grey",
+        
+        "NK cells" = "#6f2dbd",
+        "Erythrocytes" = "#f896d8")
+```
+
+```{r}
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+col_samples = brewer.pal(7, "Reds")
+names(col_samples) = samples_infected
+```
+
+```{r}
+cols_cl_tot = c(  "darkolivegreen1", "green2", "steelblue4", "tomato","steelblue2", "red2", "gold2", "mediumpurple4", "cyan2", "burlywood2", "snow4")    
+
+names(cols_cl_tot) = as.character(0:(length(unique(cols_cl_tot))-1))
+```
+
+```{r}
+cols_merged = c( "#B3DE69",  "mediumpurple4", "steelblue2", "red2", "darkblue" )
+names(cols_merged) = c("Parenchyma", "Airways", "Sub_mucosal", "Granuloma-like", "Airways-containing beads")
+```
+
+```{r}
+list_macro = list(stromal = c("Alveolar epithelial cells", "Club cells", "Fibroblast", "Endothelial cells", "Erythrocytes"), myeloid = c("Monocytes", "Macrophages", "Dendritic cells", "Neutrophils"), lymphoid = c("B cells", "T cells", "NK cells"))
+
+cols_macro = c( "tan1", "dodgerblue", "snow4")
+names(cols_macro) = c("stromal", "myeloid", "lymphoid")
+
+```
+
+## FUNCTIONS
+
+```{r}
+axx <- list(
+  gridcolor='rgb(255, 255, 255)',
+  zerolinecolor='rgb(255, 255, 255)',
+  showbackground=TRUE,
+  showticklabels = FALSE,
+  ticktext = NULL,
+  backgroundcolor='rgb(230, 230,230)',
+  title = ""
+)
+
+scale = 0.5
+
+# coor = df_coords, cl = names(cols_gran_3), col = cols_gran_3
+color_cluster_3d = function(coor, cl, col, alpha = .5){
+  #coor_2d = coor[coor$clusters %in% cl, ]
+  coor_2d = coor
+  coor_2d$clusters = as.character(factor(coor_2d$clusters, levels = names(col)))
+  coor_2d$point_size = as.numeric(ifelse(coor_2d$clusters %in% cl, 12, 0.001))
+  #coor_2d$to_plot = ifelse(coor_2d$clusters %in% cl, coor_2d$clusters, "other")
+  coor_2d$to_plot = coor_2d$clusters#factor(coor_2d$to_plot, levels = names(col))
+  xx = plot_ly() %>%
+  layout(showlegend = FALSE,
+    scene = list(aspectmode='manual',
+                 aspectratio = list(x=5*scale, y=5*scale, z=0.08*scale*1.5), 
+                 camera = list(
+                   eye = list(x = 0, y = 2.5, z = 2.5), # Adjust the camera position for desired angle
+                   up = list(x=-1, y=0, z=0)
+                   ),
+                 xaxis = axx, yaxis = axx, zaxis = axx
+                 )
+    ) %>%
+ #layout(scene = list(xaxis=list(nticks = 4, range = c(0, 6000)),yaxis=list(nticks = 4, range = c(0, 6000)),zaxis=list(nticks = 4, range = c(0, 500)))) %>%
+ # add_trace(x = coor_3d$x, y = coor_3d$y, z = coor_3d$z, type = "scatter3d", mode = "markers", marker = list(color = "black", size = 1)) %>%
+  add_trace(x = coor_2d$x, y = coor_2d$y, z = coor_2d$z, color = coor_2d$to_plot, type = "scatter3d", 
+            size = coor_2d$point_size, 
+            #sizes = coor_2d$point_size, 
+            mode = "markers", colors = c(col, "other" = "black"), opacity = 0.5, marker = list( 
+      opacity = 0.3, 
+      color = coor_2d$to_plot,
+      #size = coor_2d$point_size,
+      sizes = coor_2d$point_size, #c("0" = 5, "other"= 0.5),
+      colors = c(col, "other" = "black"),
+      colorbar = list(title = NULL),
+      showscale = FALSE
+      ), 
+      showlegend = FALSE)
+  
+return (xx)
+}
+
+```
+
+```{r}
+return_valid_markers = function(x, padj = 0.1, logFC = 1, type = "up", n = NA){
+
+  if (type == "up"){
+   x %>%
+  filter(avg_log2FC > logFC) %>%
+  filter(p_val_adj < padj)  -> valid_markers 
+    
+    if (!is.na(n)){
+    valid_markers %>%
+      group_by(cluster) %>%
+      slice_max(order_by = avg_log2FC, n = n) %>% 
+      ungroup() -> valid_markers
+    }
+  } else if (type == "down"){
+    x %>%
+  filter(avg_log2FC < logFC) %>%
+  filter(p_val_adj < padj)  -> valid_markers
+    
+    if (!is.na(n)){
+    valid_markers %>%
+      group_by(cluster) %>%
+      slice_max(order_by = - avg_log2FC, n = n) %>% 
+      ungroup() -> valid_markers
+    }
+  }
+  
+   return (valid_markers)
+}
+
+
+```
+
+```{r}
+ORA_enrich = function(markers){
+  ego_terms = compareCluster(geneClusters = markers, fun = enrichGO, OrgDb='org.Mm.eg.db', keyType="SYMBOL", ont = "BP")
+  ego_terms = clusterProfiler::simplify(ego_terms)
+  p = dotplot(ego_terms, showCategory=10, label_format = 70) + theme(axis.text.y = element_text(size = 8), axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5)) #+ ggtitle(title_ora)
+  return (list(ego_terms, p))
+}
+```
+
+```{r}
+
+hierarchical_order_clusters = function(data, scale_by, macro = FALSE, name){
+
+Idents(data) = data$my_clusters
+rctd = as.matrix(data@assays$RCTD@data, dimnames = list(rownames(data@assays$RCTD@data), data$my_clusters))
+cl = unique(data$my_clusters)
+
+
+if (macro){
+
+rctd_macro = matrix(0, ncol = dim(rctd)[2], nrow = 3)
+rctd_macro[1,] = apply(rctd[list_macro$stromal, ], 2, median)
+rctd_macro[2,] = apply(rctd[list_macro$myeloid, ], 2, median)
+rctd_macro[3,] = apply(rctd[list_macro$lymphoid, ], 2, median)
+colnames(rctd_macro) = colnames(rctd)
+rownames(rctd_macro) = names(list_macro)
+rctd = rctd_macro
+}
+
+
+
+clusters_celltypes_list = lapply(cl, function(x){ 
+  spots = colnames(data)[data$my_clusters == x]
+  apply(rctd[, spots], 1, median)
+  })
+names(clusters_celltypes_list) = cl
+clusters_celltypes <- do.call(cbind, clusters_celltypes_list)
+
+ph = pheatmap::pheatmap(clusters_celltypes, cluster_cols = TRUE, cluster_rows = FALSE, breaks = seq(-1,1,length.out=101), color = colorRampPalette(c('blue','white','red'))(100), scale = scale_by, filename = paste0(path, name), width = 6, height = 8, angle_col = 90, cellheight = 20, cellwidth = 20 )
+
+ordered_cl = colnames(clusters_celltypes)[ph$tree_col$order]
+#cl = rev(ordered_cl)
+
+return (ordered_cl)
+}
+
+```
+
+```{r}
+deconv_barplots = function(data, cl){
+  
+samples = unique(data$orig.ident)
+x = t(data@assays$RCTD$data)
+
+df <- as.data.frame(x) %>%
+  rownames_to_column(var = "vertex") %>%  # Move row names (cell types) to a column
+  pivot_longer(cols = -vertex, 
+               names_to = "cell_type", 
+               values_to = "fraction")
+df$sample = data$orig.ident[df$vertex]
+df$my_clusters = data$my_clusters[df$vertex]
+  
+df$my_clusters = factor(df$my_clusters, levels = cl) 
+df$fraction = round(df$fraction, 3)
+df$cell_type = factor(df$cell_type, levels = names(cols_celltypes))
+
+g1 = ggplot(df, aes(fill=cell_type, y=fraction, x=sample)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5, size = 5),
+        strip.text = element_text(size = 6))+
+  scale_fill_manual(values=cols_celltypes)# +
+
+g2 = ggplot(df, aes(fill=cell_type, y=fraction, x=my_clusters)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  #facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=0.5, size = 15),
+        strip.text = element_text(size = 6))+
+  scale_fill_manual(values=cols_celltypes)# +
+
+df$macro_celltype = ifelse(df$cell_type %in% list_macro$stromal, "stromal", ifelse(df$cell_type %in% list_macro$myeloid, "myeloid", "lymphoid"))
+df$macro_celltype = factor(df$macro_celltype, levels = names(cols_macro))
+
+g3 = ggplot(df, aes(fill=macro_celltype, y=fraction, x=sample)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5, size = 5),
+        strip.text = element_text(size = 6))+
+  scale_fill_manual(values=cols_macro)
+
+g4 = ggplot(df, aes(fill=macro_celltype, y=fraction, x=my_clusters)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  #facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=0.5, size = 15),
+        strip.text = element_text(size = 6))+
+  scale_fill_manual(values=cols_macro)
+
+  return (list(g1, g2, g3, g4))
+}
+```
+
+```{r}
+make_vulcano = function(df, threshold_FC, threshold_padj, title){
+
+df <- df %>%
+  mutate(gene_type = case_when(avg_log2FC > threshold_FC & p_val_adj < threshold_padj ~ "up",
+                               avg_log2FC < (-threshold_FC) & p_val_adj < threshold_padj ~ "down",
+                               TRUE ~ "ns")) 
+cols <- c("up" = "red", "down" = "green", "ns" = "grey")
+
+myvolcanoplot <- ggplot(data = df, aes(x = avg_log2FC, y = -log10(p_val_adj)), fill = gene_type) +
+  geom_point(size = 1, aes(color = gene_type)) +  
+  #facet_grid(~ comparison) +
+  geom_vline(xintercept = c(-threshold_FC, threshold_FC), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(threshold_padj), col = "gray", linetype = 'dashed') + 
+  ggtitle(paste0("Vulcano plot - ", title)) +
+  scale_colour_manual(values = cols) 
+ #geom_text_repel(max.overlaps = Inf, label = df$delabel)
+
+myvolcanoplot
+}
+
+
+# chiamata: make_vulcano(df, i)
+# df: data.frame da FindMarkers
+```
+
+```{r}
+gsea_function = function(DEGS){
+	
+	  original_gene_list <- DEGS$avg_log2FC
+  names(original_gene_list) <- rownames(DEGS)
+  gene_list<-na.omit(original_gene_list)
+  gene_list = sort(gene_list, decreasing = TRUE)
+  gsea <- gseGO(geneList=gene_list, 
+             ont ="BP", 
+             keyType = "SYMBOL", 
+             #nPerm = 10000, 
+             minGSSize = 3, 
+             maxGSSize = 800, 
+             pvalueCutoff = 0.05, 
+             verbose = TRUE, 
+             OrgDb = "org.Mm.eg.db", 
+             pAdjustMethod = "none", 
+             eps = 1e-50)
+gsea = clusterProfiler::simplify(gsea)
+p1 = ridgeplot(gsea, label_format = 80) #+ ggtitle("GSEA - MABS lsr2+ vs MABS lsr2-")
+
+return(list(gsea, p1))
+}
+```
+
+```{r}
+composition_clusters = function(d, col_cl, col_vetrini, cl){   # cl sono i cluster in ordine! i levels
+
+d$my_clusters = factor(d$my_clusters, levels = cl)
+df_data = d[[c("my_clusters", "orig.ident")]]
+colnames(df_data) = c("cluster", "vetrino")
+
+composition_df <- df_data %>%
+  group_by(cluster, vetrino) %>%
+  summarise(num_spots = n(), .groups = 'drop')
+
+g1 = ggplot(data=composition_df, aes(x=cluster, y=num_spots, fill = vetrino)) +
+  geom_bar(stat="identity", position="stack") +
+  ylab("number of spots")+
+  scale_fill_manual(values = col_vetrini)
+  ggtitle("Clusters composition by slices [# of spots]")
+    
+
+g2 = ggplot(data=composition_df, aes(x=cluster, y=num_spots, fill= vetrino)) +
+  geom_bar(stat="identity", position="fill") +
+  ggtitle("Clusters composition by slices [% of spots over slice]") +
+  ylab("% of spots") +
+  scale_fill_manual(values = col_vetrini)
+  theme(panel.grid.minor = element_blank())
+
+g3 = ggplot(data=composition_df, aes(x=vetrino, y=num_spots, fill= cluster)) +
+  geom_bar(stat="identity", position="fill") +
+  ggtitle("Slices composition by Seurat clusters [% of spots per cluster]") +
+  xlab("slices")+
+  ylab("% of spots") +
+  scale_fill_manual(values = col_cl)
+theme(panel.grid.minor = element_blank())
+
+return(list(g1, g2, g3, composition_df))
+
+}
+```
+
+
+## ALIGNMENT
+
+```{r}
+slices_merged = readRDS(paste0(path, "data/slices_merged_unfiltered.rds"))
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+infected= slices_merged[, slices_merged$orig.ident %in% samples_infected]
+
+SpatialDimPlot(infected, ncol = 2) & NoLegend()
+
+```
+
+```{r, fig.height = 6, fig.width=10}
+#NOW
+# 4 punti di riferimento per slice da allineare
+
+infected$fiducial_markers = 0
+
+coor_df = infected@images$C1@coordinates[, c(2,3)]
+x = rownames(coor_df)[((coor_df[,1] ==25) & (coor_df[,2] == 9))]
+x = c(x, rownames(coor_df)[((coor_df[,1] ==43) & (coor_df[,2] == 101))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==17) & (coor_df[,2] == 45))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==57) & (coor_df[,2] == 57))])
+infected$fiducial_markers[x] = 1:4
+
+coor_df = infected@images$D1@coordinates[, c(2,3)]
+x = rownames(coor_df)[((coor_df[,1] ==32) & (coor_df[,2] == 6))] 
+x = c(x, rownames(coor_df)[((coor_df[,1] ==48) & (coor_df[,2] == 96))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==24) & (coor_df[,2] == 40))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==64) & (coor_df[,2] == 54))])
+infected$fiducial_markers[x] = 1:4
+
+coor_df = infected@images$C2@coordinates[, c(2,3)]
+x = rownames(coor_df)[((coor_df[,1] ==36) & (coor_df[,2] == 18))]
+x = c(x, rownames(coor_df)[((coor_df[,1] ==46) & (coor_df[,2] == 112))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==26) & (coor_df[,2] == 48))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==65) & (coor_df[,2] == 69))])
+infected$fiducial_markers[x] = 1:4
+
+coor_df = infected@images$D2@coordinates[, c(2,3)]
+x = rownames(coor_df)[((coor_df[,1] ==33) & (coor_df[,2] == 13))]
+x = c(x, rownames(coor_df)[((coor_df[,1] ==47) & (coor_df[,2] == 105))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==23) & (coor_df[,2] == 45))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==63) & (coor_df[,2] == 59))])
+infected$fiducial_markers[x] = 1:4
+
+coor_df = infected@images$B3@coordinates[, c(2,3)]
+x = rownames(coor_df)[((coor_df[,1] ==33) & (coor_df[,2] == 9))]
+x = c(x, rownames(coor_df)[((coor_df[,1] ==50) & (coor_df[,2] == 94))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==24) & (coor_df[,2] == 40))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==66) & (coor_df[,2] == 48))])
+infected$fiducial_markers[x] = 1:4
+
+coor_df = infected@images$C3@coordinates[, c(2,3)]
+x = rownames(coor_df)[((coor_df[,1] ==37) & (coor_df[,2] == 7))]
+x = c(x, rownames(coor_df)[((coor_df[,1] ==46) & (coor_df[,2] == 100))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==27) & (coor_df[,2] == 35))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==67) & (coor_df[,2] == 59))])
+infected$fiducial_markers[x] = 1:4
+
+coor_df = infected@images$D3@coordinates[, c(2,3)]
+x = rownames(coor_df)[((coor_df[,1] ==51) & (coor_df[,2] == 13))]
+x = c(x, rownames(coor_df)[((coor_df[,1] ==52) & (coor_df[,2] == 104))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==38) & (coor_df[,2] == 38))])
+x = c(x, rownames(coor_df)[((coor_df[,1] ==77) & (coor_df[,2] == 71))])
+infected$fiducial_markers[x] = 1:4
+
+cols_fiducials = c("red", "blue", "green", "orange")
+names(cols_fiducials) = 1:4 
+SpatialDimPlot(infected[, infected$fiducial_markers != 0], group.by = "fiducial_markers", ncol = 4, crop = FALSE, cols = cols_fiducials, pt.size.factor = 8) +  plot_layout(guides = "collect") #& NoLegend()
+ggsave(paste0(path, "img/3D_workflow/alignment_1.png"), width = 10, height = 6)
+```
+
+```{r}
+new_xx = NULL
+sample = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+for (i in 1:7) {
+  ref_points = NULL
+  for (j in 1:4){
+    a = infected@images[[i]]@coordinates[colnames(infected)[infected$fiducial_markers == j & infected$orig.ident == sample[i]], c(2,3)]
+    a = cbind(a, GetTissueCoordinates(infected@images[[i]])[colnames(infected)[infected$fiducial_markers == j & infected$orig.ident == sample[i]], ])
+    ref_points = rbind(ref_points, a)
+  }
+  ref_points$sample = sample[i]
+  new_xx = rbind(new_xx, ref_points)
+}
+colnames(new_xx) = c("row", "col", "tissue_x", "tissue_y", "sample")
+new_xx
+```
+
+```{r}
+
+distance_centroids <- function(data, par) {
+  with(data, sum((x_A - ((x_B)*cos(par[1])-(y_B)*sin(par[1])+par[2]))^2 + (y_A - ((x_B)*sin(par[1])+(y_B)*cos(par[1])+par[3]))^2))
+}
+
+
+
+
+return_transformed <- function(data, par) {
+  data$new_x = (data$x_coor)*cos(par[1])-(data$y_coor)*sin(par[1])+par[2]
+  data$new_y = (data$x_coor)*sin(par[1])+(data$y_coor)*cos(par[1])+par[3]
+  return(data)
+}
+
+
+pixels_new = function(keep, x, n){
+  
+  n = 2
+  x$row = 0
+  x$col = 0
+  
+  prova = matrix(NA, dimnames = list(rownames(x), rownames(keep)), nrow = length(rownames(x)), ncol = length(rownames(keep)))
+  prova = as.data.frame(t(prova))   # possible x barcodes
+  # possible x (barcodes + x + y)
+  prova$x = keep$x
+  prova$y = keep$y
+  
+  for (i in 1:dim(x)[1]){   # per ogni barcode
+    d = NULL
+    for (k in 1:dim(keep)[1]){  # provo tutti possibili valori, veloce
+      dist = sum((x$new_x[i]-keep[k,1])^2 + (x$new_y[i]-keep[k,2])^2)
+      d = c(d, dist )   # salvo tutte le distanze
+    }
+    names(d) = 1:dim(keep)[1]
+    min_6 = sort(d)[1:n]
+    prova[names(min_6), rownames(x)[i]] = min_6
+    
+  }
+  #salva = prova
+  #ora = prova[,1:(dim(prova)[2]-2)]
+  prova$final = NA
+  
+  for (k in 1:(dim(prova)[1])){
+    
+    if (dim(prova)[2] == 3){  # ho assegnato tutti (rimane x, y, final)
+      break
+    } else {
+      r = prova[k,1: (dim(prova)[2]-3)]
+      names(r) = colnames(prova)[1: (dim(prova)[2]-3)]
+      
+      if (all(is.na(r))){
+        
+      } else {
+        
+        best = sort(r)[1:2] 
+        prova$final[k] = names(best)
+        prova = prova[, - best]
+        
+      }
+      
+    }
+  }
+  
+  
+  df_final = data.frame(x = prova$x, y = prova$y, barcode = prova$final)
+  df_final = na.omit(df_final)
+  for (i in 1:dim(df_final)[1]){
+    idx = df_final$barcode[i]
+    x[idx, "row"] = df_final$x[df_final$barcode == idx] 
+    x[idx, "col"] = df_final$y[df_final$barcode == idx]
+    
+  }
+  
+  return (x)
+}
+
+
+
+distance_coor <- function(data, par) {
+  
+  with(data, sum((tissue_x - (par[1] + standard_x * par[2] + standard_y * par[3]))^2 + (tissue_y - (par[4] + standard_y * par[5] + standard_x * par[6]))^2))
+}
+
+
+get_tissue_coord = function(x, par){
+  standard_x = x[, 1]
+  standard_y = x[, 2]
+  tissue_x = par[1] + standard_x * par[2] + standard_y * par[3]
+  tissue_y = par[4] + standard_y * par[5] + standard_x * par[6]
+  return (cbind(tissue_x, tissue_y))
+}
+
+```
+
+```{r}
+riferimento = infected@images[["C1"]]@coordinates[ , 2:5]
+riferimento = cbind(riferimento, GetTissueCoordinates(infected)) # in GetTissueCoordinates(infected_aligned) solo quelle del primo vetrino C1
+colnames(riferimento)[5:6] = c("tissue_x", "tissue_y")
+head(riferimento)
+# per capire da che valori partire
+#lm_row <- lm(row ~ tissue_x + tissue_y, data = riferimento)
+#lm_col <- lm(col ~ tissue_x + tissue_y, data = riferimento)
+#lm_imagerow <- lm(imagerow ~ tissue_x + tissue_y, data = riferimento)
+#lm_imagecol <- lm(imagecol ~ tissue_x + tissue_y, data = riferimento)
+
+lm_imagerow <- lm(imagerow ~ row + col, data = riferimento)
+lm_imagecol <- lm(imagecol ~ row + col, data = riferimento)
+lm_tissuex <- lm(tissue_x ~ row + col, data = riferimento)
+lm_tissuey <- lm(tissue_y ~ row + col, data = riferimento)
+
+```
+
+```{r}
+fare = function(df1_tot, df2_tot, keep, ref_coor, samples, n){
+  
+  coor = data.frame(x_A = ref_coor$row[ref_coor$sample == samples[1]], x_B = ref_coor$row[ref_coor$sample == samples[2]], y_A = ref_coor$col[ref_coor$sample == samples[1]], y_B = ref_coor$col[ref_coor$sample == samples[2]])
+  p = optim(par = c(0, 0, 0), fn = distance_centroids, data = coor)
+  
+  new_coor = return_transformed(df2_tot, p$par)         # x_coor y_coor new_x new_y
+  colnames(new_coor)[3:4] = c("row", "col")
+  # da GetTissueCoordinates a pixel row col
+  #new_coor$new_x = predict(lm_row, new_coor)
+  #new_coor$new_y = predict(lm_col, new_coor)
+  new_coor$imagerow = predict(lm_imagerow, new_coor)
+  new_coor$imagecol = predict(lm_imagecol, new_coor)
+  #x = pixels_new(keep, new_coor, n = 2)                      # x_coor y_coor new_x new_y row col
+  #x = data.frame(row = 0, col = 0)
+  
+  # controllo che sia ok
+  #if (!all(apply(x[, tail(1:dim(x)[2], 4)], 1, control) < 10)){
+  #stop("No valid pixels")
+  #}
+  x = new_coor
+  #bb = rownames(x)[!apply(x[, tail(1:dim(x)[2], 4)], 1, control) < 10]
+  #x$imagerow = predict(lm_imagerow, x)
+  #x$imagecol = predict(lm_imagecol, x)
+  x$tissue_x = predict(lm_tissuex, x)
+  x$tissue_y = predict(lm_tissuey, x)
+  # per validation con reference points shiftati
+  cor_B = data.frame(x_coor = ref_coor$row[ref_coor$sample == samples[2]], y_coor = ref_coor$col[ref_coor$sample == samples[2]])
+  centroid_2 = return_transformed(cor_B, p$par) 
+  
+  return (list(x, p$par, centroid_2))
+}
+
+```
+
+```{r}
+# nuovo
+samples = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+
+tot_coor = infected@images[[samples[1]]]@coordinates[ , c("row", "col")]
+#tot_coor = GetTissueCoordinates(infected@images[[samples[1]]])#@coordinates[ , c("row", "col")]
+tot_coor = cbind(tot_coor, tot_coor)
+#tot_coor = cbind(tot_coor, infected@images[[samples[1]]]@coordinates[ , 2:5])
+tot_coor = cbind(tot_coor, cbind(infected@images[[samples[1]]]@coordinates[ , 4:5], GetTissueCoordinates(infected@images[[samples[1]]])))
+tot_coor$sample = samples[1]
+colnames(tot_coor) = c("x_coor", "y_coor", "row", "col", "imagerow", "imagecol", "tissue_x", "tissue_y", "sample" )
+list_align = list()
+i = 1
+
+for (i in 1:6){   # 6 allineamenti 
+  print(i)
+  if (i == 1){ 
+    df1_tot = infected@images[[samples[1]]]@coordinates[, c("row", "col")]
+    #df1_tot = GetTissueCoordinates(infected@images[[samples[1]]])#@coordinates[, c("row", "col")]
+    colnames(df1_tot) = c("row", "col")
+    ref_coor = new_xx[new_xx$sample %in% samples[1:2], ]
+  } else {
+    df1_tot = list_align[[i-1]][[1]][ , c("row", "col")]
+    ref_coor = list_align[[i-1]][[3]][, c("new_x", "new_y")]
+    ref_coor$sample = samples[i]
+    colnames(ref_coor) = c("row", "col", "sample")
+    ref_coor = rbind(ref_coor, new_xx[new_xx$sample %in% samples[i+1], c("row", "col", "sample")])
+  }
+  colnames(df1_tot) = c("x_coor", "y_coor")
+  df2_tot = infected@images[[samples[i+1]]]@coordinates[, c("row", "col")]
+  #df2_tot = GetTissueCoordinates(infected@images[[samples[i+1]]])#@coordinates[, c("row", "col")]
+  colnames(df2_tot) = c("x_coor", "y_coor")
+  new_2 = fare(df1_tot, df2_tot, keep, ref_coor, samples = samples[i:(i+1)], n = 4)
+  
+  new_2[[2]] = new_2[[2]]* (c(1, 180/pi, 1))
+  list_align[[i]] = new_2
+  
+  new_coor = new_2[[1]]#[, c("row", "col")]
+  new_coor$sample = samples[i+1]
+  tot_coor = rbind(tot_coor, new_coor)  # row col sample
+  
+}
+#new_coor
+#tot_coor
+dim(tot_coor)
+saveRDS(tot_coor, paste0(path, "data/tot_coor.rds"))
+```
+
+```{r}
+tot_coor = readRDS(paste0(path, "data/tot_coor.rds"))
+# guardo trasformazioni vedendo spostamento 4 punti di riferimento
+fiducials = rownames(new_xx)
+
+new_ref_coor = new_xx[new_xx$sample == "C1", c("tissue_x", "tissue_y")] 
+new_ref_coor = cbind(new_ref_coor, new_ref_coor)
+colnames(new_ref_coor) = c("x_coor", "y_coor", "new_x", "new_y")
+new_ref_coor$sample = "C1"
+
+for (i in 1:6){
+  pre = new_xx[new_xx$sample == samples[i+1], c("tissue_x", "tissue_y")]
+  new_coor = cbind(pre, na.omit(list_align[[i]][[1]][fiducials, c("tissue_x", "tissue_y")]))
+  new_coor$sample = sample[i+1]
+  colnames(new_coor) = c("x_coor", "y_coor", "new_x", "new_y", "sample")
+  new_ref_coor = rbind(new_ref_coor, new_coor)
+  
+}
+
+new_ref_coor$sample = factor(new_ref_coor$sample, levels = samples)
+# x_coor y_coor new_x new_y sample
+table(new_ref_coor$sample)
+
+df_pre = data.frame(x = c(new_ref_coor$x_coor, new_ref_coor$new_x), y = c(new_ref_coor$y_coor, new_ref_coor$new_y), sample = rep(new_ref_coor$sample, 2), type = c(rep("before", dim(new_ref_coor)[1]), rep("after", dim(new_ref_coor)[1])))
+
+df = df_pre
+df$x = (df_pre$y) * 10
+df$y = (650 - df_pre$x) * 10
+df$type = factor(df$type, levels = c("before", "after"))
+df$fiducial = as.factor(1:4)
+
+ggplot(df[df$type == "before", ], aes(x = x, y = y) )+
+  geom_point(aes(shape = sample)) +
+  scale_shape_manual(values = 1:7) +
+  ggtitle("Before transformation")
+#ggsave('/beegfs/scratch/ric.hsr/Gaia_saldarini/spatial_1/images/Mapping_3.png') #, height = 8, width = 8)
+
+ggplot(df[df$type == "after", ], aes(x = x, y = y) )+
+  geom_point(aes(shape = sample)) +
+  scale_shape_manual(values = 1:7) +
+  ggtitle("After transformation")
+#ggsave('/beegfs/scratch/ric.hsr/Gaia_saldarini/spatial_1/images/Mapping_3.png') #, height = 8, width = 8)
+
+ggplot(df, aes(x = x, y = y) )+
+  geom_point(aes(shape = sample, colour = type), size = 2.5) +
+  scale_shape_manual(values = 1:7) +
+  coord_fixed(ratio = 1) +
+  #theme_void() + 
+  ggtitle("Before and after transformation") +
+  theme(axis.text.x = element_text(size = 12), 
+        axis.text.y = element_text(size = 12), 
+        axis.title= element_text(size = 10))
+
+ggsave(paste0(path, "img/3D_workflow/alignment_2.png"))
+
+
+cols_fiducials = c("red", "blue", "green", "orange")
+names(cols_fiducials) = 1:4
+
+ggplot(df, aes(x = x, y = y) )+
+  geom_point(aes(shape = type, colour = fiducial), size = 2.5) +
+  scale_shape_manual(values = 1:7) +
+  coord_fixed(ratio = 1) +
+  scale_color_manual(values = cols_fiducials) +
+  ggtitle("Before and after transformation") +
+  scale_shape_manual(values = c("before" = 4, "after" = 19)) +
+  theme(axis.text.x = element_text(size = 12), 
+        axis.text.y = element_text(size = 12), 
+        axis.title= element_text(size = 10))
+ggsave(paste0(path, "img/3D_workflow/alignment_3.png"))
+
+```
+
+```{r}
+#k = data.frame(rbind(cbind(x = df1_tot$x_coor, y = df1_tot$y_coor, slice = "C1"), cbind(x = new_2[[1]][, "row"], y = new_2[[1]][, "col"], slice = "D1"), cbind(x = new_3[[1]][, 6], y = new_3[[1]][, 7], slice = "C"), cbind(x = new_4[[1]][, 6], y = new_4[[1]][, 7], slice = "D")))
+#tot_coor = readRDS(paste0(path, "data/tot_coor_oggi.rds"))
+k = tot_coor[, c("tissue_x", "tissue_y", "sample")]
+colnames(k) = c("x", "y", "slice")
+k$x = as.numeric(k$x)
+k$y = as.numeric(k$y)
+
+test = k[, c("x", "y")]
+test$count <- 1
+test$xy = paste0(as.character(test$x), ",", as.character(test$y))
+unique_spots= aggregate(count ~ xy, test, FUN = sum)
+idx1 = seq(from = 1, to = 2*dim(unique_spots)[1], by = 2)
+idx2 = seq(from = 2, to = 2*dim(unique_spots)[1], by = 2)
+unique_spots$x = as.numeric(unlist(str_split(unique_spots$xy, ","))[idx1])
+unique_spots$y = as.numeric(unlist(str_split(unique_spots$xy, ","))[idx2])
+sort(unique(unique_spots$count))
+
+test=as.data.frame(table(k[,1:2]))
+test <- test[which(!test$Freq==0),]
+test$x = as.numeric(test$x)
+test$y = as.numeric(test$y)
+unique(test$Freq)
+
+reds = brewer.pal(7, "Reds")
+col_infected = reds
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+names(col_infected) = samples_infected
+
+k$slice = factor(k$slice, levels = names(col_infected))
+```
+
+```{r}
+tot_coor[4000: 4100, ]
+```
+
+
+```{r, fig.height=4, fig.width = 4}
+# guardo 2 a 2
+
+for (i in 1:6){
+  print(ggplot(k[k$slice %in%samples[i:(i+1)], ], aes(x = y, y = -x) )+
+  #background_image(img_s1) +
+    geom_point(aes(colour = factor(slice)))+ 
+  scale_color_manual(values=col_infected[i:(i+1)]) +
+    theme_void() +
+    coord_fixed(ratio = 1) +
+  ggtitle(paste0("Overlapping slices ", samples[i], " and ",  samples[i+1]))) 
+ # ggsave(paste0(path, "img/alignment/fiducials_transformed.png"))
+}
+```
+
+```{r}
+# film
+
+for (i in 1:6){
+  print(ggplot(k[k$slice %in%samples[1:(i+1)], ], aes(x = y, y = -x) )+
+  #background_image(img_s1) +
+    geom_point(aes(colour = factor(slice)), alpha = 0.3)+ 
+  scale_color_manual(values=col_infected[1:(i+1)]) +
+    theme_void() +
+   # theme(legend.position = "none") +
+  ggtitle("Overlapping slices"))#, samples[i], " and ",  samples[i+1]))) 
+  #ggsave(paste0(path, "img/alignment_", i, ".png"))#, width = 8, height = 4)
+}
+
+ggsave(paste0(path, "img/3D_workflow/alignment_4.png"))
+```
+```{r, fig.height=4.5, fig.width = 4.5}
+#k = data.frame(rbind(cbind(x = df1_tot$x_coor, y = df1_tot$y_coor, slice = "C1"), cbind(x = new_2[[1]][, "row"], y = new_2[[1]][, "col"], slice = "D1"), cbind(x = new_3[[1]][, 6], y = new_3[[1]][, 7], slice = "C"), cbind(x = new_4[[1]][, 6], y = new_4[[1]][, 7], slice = "D")))
+#tot_coor = readRDS(paste0(path, "data/tot_coor_oggi.rds"))
+k = tot_coor[, c("x_coor", "y_coor", "sample")]
+colnames(k) = c("x", "y", "slice")
+k$x = as.numeric(k$x)
+k$y = as.numeric(k$y)
+
+test = k[, c("x", "y")]
+test$count <- 1
+test$xy = paste0(as.character(test$x), ",", as.character(test$y))
+unique_spots= aggregate(count ~ xy, test, FUN = sum)
+idx1 = seq(from = 1, to = 2*dim(unique_spots)[1], by = 2)
+idx2 = seq(from = 2, to = 2*dim(unique_spots)[1], by = 2)
+unique_spots$x = as.numeric(unlist(str_split(unique_spots$xy, ","))[idx1])
+unique_spots$y = as.numeric(unlist(str_split(unique_spots$xy, ","))[idx2])
+sort(unique(unique_spots$count))
+
+test=as.data.frame(table(k[,1:2]))
+test <- test[which(!test$Freq==0),]
+test$x = as.numeric(test$x)
+test$y = as.numeric(test$y)
+unique(test$Freq)
+
+reds = brewer.pal(7, "Reds")
+col_infected = reds
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+names(col_infected) = samples_infected
+
+k$slice = factor(k$slice, levels = names(col_infected))
+
+for (i in 1:6){
+  print(ggplot(k[k$slice %in%samples[1:(i+1)], ], aes(x = x, y = y) )+
+  #background_image(img_s1) +
+    geom_point(aes(colour = factor(slice)))+ 
+  scale_color_manual(values=col_infected[1:(i+1)]) +
+    theme_void() +
+   # theme(legend.position = "none") +
+  ggtitle("Overlapping slices"))#, samples[i], " and ",  samples[i+1]))) 
+  #ggsave(paste0(path, "img/alignment_", i, ".png"))#, width = 8, height = 4)
+}
+
+ggplot(k[k$slice %in%samples[1:7], ], aes(x = x, y = y) )+
+  #background_image(img_s1) +
+    geom_point(aes(colour = factor(slice)), alpha = 0.2)+ 
+  scale_color_manual(values=col_infected[1:7]) +
+    theme_void() +
+   # theme(legend.position = "none") +
+  ggtitle("Overlapping slices")
+
+ggsave(paste0(path, "img/3D_workflow/alignment_5.png"))
+```
+
+
+```{r, fig.height=3.5, fig.width=4}
+
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+#df = data.frame(x = 1:56, y = 1:56, sample = rep(unlist(lapply(samples_infected, function(x){rep(x, 4)})), 2))
+df$fiducial = rep(1:4, 14)
+#df$type = c(rep("before", 28), rep("after", 28))
+pairs = combn(samples_infected, 2)
+
+dist_before = list()
+dist_after = list()
+for (i in 1:4){
+  before = df[df$type == "before" & df$fiducial == i , ]
+  rownames(before) = before$sample
+  dist_before[[i]] = apply(pairs, 2, function(x) { 
+    sqrt((before[x[1], "x"] - before[x[2], "x"])^2 + (before[x[1], "y"] - before[x[2], "y"])^2)
+  })
+  
+  after = df[df$type == "after" & df$fiducial == i, ]
+  rownames(after) = after$sample
+  dist_after[[i]] = apply(pairs, 2, function(x) { 
+    sqrt((after[x[1], "x"] - after[x[2], "x"])^2 + (after[x[1], "y"] - after[x[2], "y"])^2)
+  })
+}
+
+
+dist = data.frame(dist = c(unlist(dist_before), unlist(dist_after)), 
+                  fiducial = rep(unlist(lapply(1:4, function(x){rep(x, 21)})), 2), 
+                  type = c(rep("before", 84), rep("after", 84)))
+
+dist$type = factor(dist$type, levels = c("before", "after"))
+dist$fiducial = as.factor(dist$fiducial)
+
+
+ggplot(dist, aes(fill=type, y=dist, x=fiducial)) + 
+  geom_boxplot() + #NoLegend() +
+  theme(axis.text.x = element_text(size = 10), 
+        axis.text.y = element_text(size = 8))
+ggsave(paste0(path, "img/3D_workflow/alignment_6.png"), height = 3.5, width = 4)
+#ggsave(paste0(path, "img/alignment/fiducials_dist_boxplots.png"))
+```
+
+```{r}
+df_coords = tot_coor[ , c("tissue_x", "tissue_y", "sample")]
+
+z_values = c(0, 5, 35, 45, 65, 70, 80)
+for ( i in 1:7){
+  df_coords$z[endsWith(rownames(df_coords), samples_infected[i])] = z_values[i]
+}
+colnames(df_coords) = c("x", "y", "sample", "z")
+df_coords$x = df_coords$x * 10
+df_coords$y = df_coords$y * 10
+
+```
+
+```{r}
+
+
+df_coords$sample = factor(df_coords$sample, levels = names(col_samples))
+```
+
+```{r}
+align_3d = plot_ly() %>%
+  layout(scene = list(aspectmode='manual',aspectratio = list(x=1.5, y=1.5, z=0.3))) %>%
+ #layout(scene = list(xaxis=list(nticks = 4, range = c(0, 6000)),yaxis=list(nticks = 4, range = c(0, 6000)),zaxis=list(nticks = 4, range = c(0, 500)))) %>%
+  add_trace(x = df_coords$x, y = df_coords$y, z = df_coords$z, color = df_coords$sample, colors = col_samples, type = "scatter3d", mode = "markers", size = 1)
+
+align_3d
+
+#htmlwidgets::saveWidget(as_widget(align_3d), paste0(path, "img/align_infected_3D.html"))
+```
+
+
+## SCT - SPATIAL PCA
+
+```{r, warning = FALSE}
+tot_coor = readRDS(paste0(path, "data/tot_coor.rds"))
+slices_merged = readRDS(paste0(path, "data/slices_merged.rds"))
+host_genes = read.csv(paste0(path, "/data/host_genes.csv"))[[1]]
+length(host_genes)
+infected_aligned = slices_merged[host_genes, slices_merged$orig.ident %in% samples_infected]
+#infected_aligned[["Spatial"]] = JoinLayers(infected_aligned[["Spatial"]])
+infected_aligned[["RCTD"]] = CreateAssayObject(data = slices_merged@assays$RCTD$data[, colnames(infected_aligned)])
+# togliere beads
+beads = read.csv(paste0(path, "data/beads.csv"))[[1]]
+# solo su host genes
+```
+```{r, warning = FALSE}
+z_values = c(0, 5, 35, 45, 65, 70, 80)
+for ( i in 1:7){
+  tot_coor$z[endsWith(rownames(tot_coor), samples_infected[i])] = z_values[i]
+}
+
+for (i in 1:7){
+  infected_aligned@images[[samples_infected[i]]]@coordinates$row_aligned =    tot_coor[rownames(infected_aligned@images[[samples_infected[i]]]@coordinates), "row"]
+  infected_aligned@images[[samples_infected[i]]]@coordinates$col_aligned =    tot_coor[rownames(infected_aligned@images[[samples_infected[i]]]@coordinates), "col"]
+  # imagerow serve per fare i plot, tengo quelle non allineate per matchare immagine istologica
+  infected_aligned@images[[samples_infected[i]]]@coordinates$imagerow_aligned = tot_coor[rownames(infected_aligned@images[[samples_infected[i]]]@coordinates), "imagerow"]
+   infected_aligned@images[[samples_infected[i]]]@coordinates$imagecol_aligned = tot_coor[rownames(infected_aligned@images[[samples_infected[i]]]@coordinates), "imagecol"]
+  infected_aligned@images[[samples_infected[i]]]@coordinates$tissue_x = tot_coor[rownames(infected_aligned@images[[samples_infected[i]]]@coordinates), "tissue_x"]
+  infected_aligned@images[[samples_infected[i]]]@coordinates$tissue_y = tot_coor[rownames(infected_aligned@images[[samples_infected[i]]]@coordinates), "tissue_y"]
+  infected_aligned@images[[samples_infected[i]]]@coordinates$z = tot_coor[rownames(infected_aligned@images[[samples_infected[i]]]@coordinates), "z"]
+}
+
+#GetTissueCoordinates(infected_aligned, image = samples_infected[1], scale = "hires") = tot_coor[colnames(infected_aligned@images$C1@coordinates), c("tissue_x", "tissue_y")]
+ 
+```
+
+```{r, warning = FALSE}
+filtered_spatialPCA = infected_aligned[, ! (colnames(infected_aligned) %in% c(beads))]
+dim(filtered_spatialPCA)
+```
+```{r}
+spatially_variable_genes = readRDS(paste0(path, "data/spatially_variable_genes.rds"))
+spatialPCs = readRDS(paste0(path, "data/spatialPCs.rds"))
+```
+
+```{r}
+spatialPCA_space = spatialPCs
+dim(spatialPCA_space)
+spatialPCA_space = t(spatialPCA_space)
+dim(spatialPCA_space)
+colnames(spatialPCA_space) <- paste0("spatialPCA_3D_", 1:20)
+
+```
+```{r, warning= FALSE, message = FALSE, verbose = FALSE}
+# SCT su tutto, spatialPCA tolgo beads
+infected_aligned[["RNA"]] = infected_aligned[["Spatial"]]
+infected_aligned[["RNA"]] <- split(infected_aligned[["RNA"]], f = infected_aligned$orig.ident)
+DefaultAssay(infected_aligned) = "RNA"
+infected_aligned = SCTransform(infected_aligned,assay='RNA',vst.flavor='v2', residual.features = spatially_variable_genes)
+```
+
+```{r, warning = FALSE}
+filtered_spatialPCA = infected_aligned[, ! (colnames(infected_aligned) %in% c(beads))]
+dim(filtered_spatialPCA)
+
+filtered_spatialPCA[["spatialPCA_3D"]] <- CreateDimReducObject(embeddings =  spatialPCA_space, key = "spatialPCA3D_", assay = "SCT")
+
+```
+```{r, fig.height=5, fig.width = 10}
+SpatialDimPlot(infected_aligned, alpha = 0, ncol = 4) & NoLegend()
+ggsave(paste0(path, "img/3D_workflow/he_image.png"), height = 5, width = 10)
+```
+
+
+## HARMONY INTEGRATION
+
+
+```{r, warning = FALSE}
+top10 <- head(VariableFeatures(filtered_spatialPCA), 10)
+
+DefaultAssay(filtered_spatialPCA) = "SCT"
+#VariableFeaturePlot(filtered_spatialPCA,  assay = "SCT")
+# plot variable features with and without labels
+#plot1 <- VariableFeaturePlot(filtered_spatialPCA, assay = "SCT")
+#plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+#plot1
+
+```
+
+```{r, warning = FALSE}
+#filtered_spatialPCA[["SCT"]] <- split(filtered_spatialPCA[["SCT"]], f = filtered_spatialPCA$orig.ident)
+#filtered_spatialPCA[["SCT"]] <- JoinLayers(filtered_spatialPCA[["SCT"]])
+
+harmony_spatialPCA_3D <- IntegrateLayers(object = filtered_spatialPCA, method = HarmonyIntegration, orig.reduction = "spatialPCA_3D",  new.reduction = "harmony", #normalization.method = "SCT", 
+                                     assay = "SCT",
+                        verbose = FALSE)
+
+harmony_spatialPCA_3D@reductions$harmony@stdev = as.numeric(apply(harmony_spatialPCA_3D@reductions$harmony@cell.embeddings, 2, stats::sd))
+
+#harmony_spatialPCA_3D[["SCT"]] <- JoinLayers(harmony_spatialPCA_3D[["SCT"]])
+DefaultAssay(harmony_spatialPCA_3D) = "SCT"
+```
+
+```{r, message = FALSE, echo = FALSE}
+
+# guardo lo spazio spatialPCA
+
+DimPlot(harmony_spatialPCA_3D, reduction = "spatialPCA_3D", group.by = "orig.ident", cols = col_samples)
+ggsave(paste0(path, "img/3D_workflow/technical_1.png"))
+DimPlot(harmony_spatialPCA_3D, reduction = "spatialPCA_3D", split.by = "orig.ident", cols = col_samples)
+DimPlot(harmony_spatialPCA_3D, reduction = "spatialPCA_3D", split.by = "batch", cols = col_samples)
+
+DimPlot(harmony_spatialPCA_3D, reduction = "spatialPCA_3D", group.by = "batch")
+ggsave(paste0(path, "img/3D_workflow/technical_2.png"))
+DimPlot(harmony_spatialPCA_3D, group.by = "batch", reduction = "spatialPCA_3D", dims = c(3,4))
+ggsave(paste0(path, "img/3D_workflow/technical_3.png"))
+
+DimPlot(harmony_spatialPCA_3D, group.by = "batch", reduction = "harmony")
+ggsave(paste0(path, "img/3D_workflow/technical_4.png"))
+DimPlot(harmony_spatialPCA_3D, group.by = "batch", reduction = "harmony", dims = c(3, 4))
+ggsave(paste0(path, "img/3D_workflow/technical_5.png"))
+
+DimPlot(harmony_spatialPCA_3D, group.by = "orig.ident", reduction = "harmony", cols = col_samples)
+ggsave(paste0(path, "img/3D_workflow/technical_6.png"))
+
+```
+
+```{r}
+dim(harmony_spatialPCA_3D@reductions$harmony)
+dim(harmony_spatialPCA_3D@reductions$pca)
+#VizDimLoadings(harmony_spatialPCA_3D, dims = 1:2, reduction = "spatialPCA_3D")
+#VizDimLoadings(integration_tot, dims = 1:2, reduction = "harmony")
+
+#integration_tot@reductions$pca@
+png(paste0(path, "img/3D_workflow/technical_9.png"))
+ElbowPlot(harmony_spatialPCA_3D, ndims=20, reduction = "harmony")
+dev.off()
+
+pc.touse <- (harmony_spatialPCA_3D$harmony@stdev)^2
+pc.touse <- pc.touse/sum(pc.touse)
+pc.touse <- cumsum(pc.touse)[1:50]
+pc.touse <- min(which(pc.touse>=0.75))
+pc.touse
+
+# scelgo 20
+```
+
+```{r}
+harmony_spatialPCA_3D <- FindNeighbors(harmony_spatialPCA_3D, reduction = "harmony", dims = 1:20)
+```
+```{r, fig.width=4, fig.height=3}
+
+res_par = seq(0.2, 1, length.out = 17)
+res_par
+sil_metric = NULL
+n_clusters = NULL
+dist.matrix <-dist(harmony_spatialPCA_3D@reductions$harmony@cell.embeddings)
+x = harmony_spatialPCA_3D
+
+#saveRDS(harmony_spatialPCA_3D, paste0(path, "data/spatialPCA_harmony_2810.rds"))
+for (i in 1:length(res_par)){
+  print(i)
+  name_cl = paste0("clusters_", res_par[i])
+  x = FindClusters(x, resolution = res_par[i], cluster.name = name_cl)
+  clusters <- x@meta.data[[name_cl]]
+  sil <- cluster::silhouette(x = as.numeric(as.factor(clusters)), dist = dist.matrix)
+  sil_metric[i] <-mean(sil[, 3])
+  n_clusters[i] = length(unique(x@meta.data[[name_cl]]))
+}
+
+sil_df = data.frame(silhouette = sil_metric, resolution = res_par, n_clusters = n_clusters)
+ggplot(sil_df, aes(x=resolution, y=silhouette)) +
+    geom_line() +
+    geom_point() +
+  geom_point(data=sil_df %>% filter(resolution == 0.5), #> 0.50 & resolution< 0.60), 
+           pch=21, 
+           size=10, 
+           colour="red")
+ggsave(paste0(path, "img/3D_workflow/technical_7.png"))
+ggplot(sil_df, aes(x=resolution, y=n_clusters)) +
+    geom_line() +
+    geom_point() +
+  geom_point(data=sil_df %>% filter(resolution == 0.5), #> 0.0 & resolution< 0.60), # resolution == 0.6
+           pch=21, 
+           size=10, 
+           colour="red")
+ggsave(paste0(path, "img/3D_workflow/technical_8.png"))
+dist.matrix = 0
+``` 
+
+```{r, message = FALSE, echo = FALSE, verbose = FALSE}
+harmony_spatialPCA_3D <- FindClusters(harmony_spatialPCA_3D, resolution = 0.5)
+harmony_spatialPCA_3D$seurat_clusters = harmony_spatialPCA_3D$SCT_snn_res.0.5
+Idents(harmony_spatialPCA_3D) = harmony_spatialPCA_3D$SCT_snn_res.0.5
+harmony_spatialPCA_3D$my_clusters = Idents(harmony_spatialPCA_3D)
+table(Idents(harmony_spatialPCA_3D))
+harmony_spatialPCA_3D <- RunUMAP(harmony_spatialPCA_3D, dims = 1:20, reduction = "harmony")
+```
+
+```{r}
+
+DimPlot(harmony_spatialPCA_3D, cols = col_samples, group.by = "orig.ident")
+ggsave(paste0(path, "img/3D_workflow/pre_0.png"))
+
+DimPlot(harmony_spatialPCA_3D, cols = cols_cl_tot) & NoLegend()
+ggsave(paste0(path, "img/3D_workflow/pre_1.png"))
+```
+
+```{r, fig.height= 5, fig.width=12}
+DimPlot(harmony_spatialPCA_3D, cols = cols_cl_tot, split.by = "orig.ident", ncol = 4)
+ggsave(paste0(path, "img/3D_workflow/pre_2.png"), height = 5, width = 12)
+```
+
+```{r, fig.height=6, fig.width = 10}
+SpatialDimPlot(harmony_spatialPCA_3D, ncol = 4, group.by = "seurat_clusters", cols = cols_cl_tot) & NoLegend() #+ plot_layout(guides = "collect")
+ggsave(paste0(path, "img/3D_workflow/pre_3.png"), width = 10, height = 6)
+```
+
+
+
+
+```{r, fig.height=10, fig.width=13, message = FALSE, echo = FALSE}
+# MARKERS
+
+Idents(harmony_spatialPCA_3D) = factor(harmony_spatialPCA_3D$seurat_clusters, levels = 0:(length(unique(harmony_spatialPCA_3D$seurat_clusters))-1))
+harmony_spatialPCA_3D = PrepSCTFindMarkers(harmony_spatialPCA_3D)
+markers_clusters <- FindAllMarkers(harmony_spatialPCA_3D, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+saveRDS(markers_clusters, file = paste0(path, "data/markers_infected_3D_pre.rds"))
+markers_clusters = readRDS(paste0(path, "data/markers_infected_3D_pre.rds"))
+```
+
+```{r, fig.width=10, fig.height= 12}
+# HEATMAP 
+
+common_genes = intersect(markers_clusters$gene, rownames(harmony_spatialPCA_3D@assays$SCT$scale.data))
+markers_clusters_filtered = markers_clusters[markers_clusters$gene %in% common_genes, ]
+markers_clusters_filtered %>%
+  filter(p_val_adj < 0.01) %>%
+  group_by(cluster) %>%
+  top_n(n = 3, wt = avg_log2FC) -> top_markers
+  
+  #top_markers = return_markers(markers, logFC = 0.3, padj = 0.01, n = n_top) # stessa cosa
+  p1 = DoHeatmap(harmony_spatialPCA_3D, features = top_markers$gene, assay = "SCT", group.colors = cols_cl_tot)+ guides(color = "none") + theme(axis.text.y = element_text(size = 14)) #& NoLegend()
+    p1
+    ggsave(paste0(path, "img/3D_workflow/pre_4.png"), width = 10, height = 12)
+    
+
+```
+
+
+```{r, fig.height=10, fig.width = 10}
+# ORA ENRICHMENT UP E DOWN
+cl = sort(unique(harmony_spatialPCA_3D$seurat_clusters))
+# per scegliere threshold
+DEGS_density = split(markers_clusters, markers_clusters$cluster)
+lapply(DEGS_density, function(df) {
+  mm = return_valid_markers(df, padj = 1e-2, logFC = 1, type = "up", n = NA)
+  dim(mm)[1]
+  #dim(mm[["down"]])[1]
+})
+
+valid_markers_up = lapply(DEGS_density, function(df) {
+  mm = return_valid_markers(df, padj = 1e-2, logFC = 1, type = "up", n = NA)
+  rownames(mm)
+  
+})
+names(valid_markers_up) = c(paste0("cl_", cl))
+#names(valid_markers_down) = c(paste0("cl_", cl))
+
+pp = ORA_enrich(valid_markers_up)
+#pp[[2]]
+dotplot(pp[[1]], showCategory=10, label_format = 70) + theme(axis.text.y = element_text(size = 8), axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5)) #+ ggtitle(title_ora)
+ggsave(paste0(path, "img/3D_workflow/pre_5.png"), height = 10, width = 10)
+
+```
+
+```{r}
+harmony_spatialPCA_3D$my_clusters = harmony_spatialPCA_3D$seurat_clusters
+table(harmony_spatialPCA_3D$my_clusters)
+ordered_cl = hierarchical_order_clusters(data = harmony_spatialPCA_3D, scale_by = "column", macro = FALSE, name = "img/3D_workflow/pre_10.png")
+harmony_spatialPCA_3D$my_clusters = factor(harmony_spatialPCA_3D$my_clusters, levels = ordered_cl)
+```
+
+```{r}
+aa = composition_clusters(harmony_spatialPCA_3D, col_cl = cols_cl_tot, col_vetrini = col_samples, cl = 0:(length(unique(harmony_spatialPCA_3D$SCT_snn_res.0.5))-1))
+
+aa[[1]]
+ggsave(paste0(path, "img/3D_workflow/pre_9.png"))#, height = 4, width = 10)
+aa[[2]] + theme(axis.text.x = element_text(size = 14))
+ggsave(paste0(path, "img/3D_workflow/pre_10.png"))#, height = 4, width = 10)
+aa[[3]]
+
+aa = composition_clusters(harmony_spatialPCA_3D, col_cl = cols_cl_tot, col_vetrini = col_samples, cl = ordered_cl)
+ggsave(paste0(path, "img/3D_workflow/pre_11.png"))#, height = 4, width = 10)
+aa[[4]]
+```
+
+```{r, fig.width = 10, fig.height=4}
+harmony_spatialPCA_3D$my_clusters = harmony_spatialPCA_3D$seurat_clusters
+aa = deconv_barplots(data = harmony_spatialPCA_3D, cl = ordered_cl)
+aa[[1]]
+ggsave(paste0(path, "img/3D_workflow/pre_6.png"), height = 4, width = 10)
+aa[[2]]
+ggsave(paste0(path, "img/3D_workflow/pre_7.png"), height = 4, width = 10)
+aa[[3]]
+ggsave(paste0(path, "img/3D_workflow/pre_8.png"), height = 4, width = 10)
+aa[[4]]
+ggsave(paste0(path, "img/3D_workflow/pre_9.png"), height = 4, width = 10)
+```
+
+
+## 6 vs 9
+
+```{r}
+cl_compare = c("6", "9")
+table(harmony_spatialPCA_3D$my_clusters, harmony_spatialPCA_3D$batch)[cl_compare, ]
+```
+```{r, fig.height=5, fig.width=10}
+cols_69 = c("gold", "burlywood3")
+names(cols_69) = c(6, 9)
+SpatialDimPlot(harmony_spatialPCA_3D[, harmony_spatialPCA_3D$seurat_clusters %in% cl_compare], ncol = 4, cols = cols_69, crop = FALSE, image.alpha =0.5) + plot_layout(guides = "collect")  #& NoLegend()
+ggsave(paste0(path, "img/3D_workflow/cfr_5.png"), height = 5, width = 10)
+```
+
+```{r}
+#harmony_spatialPCA_3D = PrepSCTFindMarkers(harmony_spatialPCA_3D)
+
+DEG_tot = FindMarkers(harmony_spatialPCA_3D, ident.1 = cl_compare[1], ident.2 = cl_compare[2], group.by = 'my_clusters', assay = "SCT") 
+
+DEG_12batch = FindMarkers(harmony_spatialPCA_3D[, harmony_spatialPCA_3D$batch %in% c("1", "2")], ident.1 = cl_compare[1], ident.2 = cl_compare[2], group.by = 'my_clusters', assay = "SCT")
+
+```
+
+```{r}
+make_vulcano(df = DEG_12batch, threshold_FC = 0.5, threshold_padj = 0.01, title = "DEG batch 1,2")
+make_vulcano(df = DEG_tot, threshold_FC = 0.5, threshold_padj = 0.01, title = "DEG tot")
+```
+
+```{r}
+
+genes_common = intersect(rownames(DEG_12batch), rownames(DEG_tot))
+df_l2FC = data.frame(batch_12 = DEG_12batch[genes_common, "avg_log2FC"], tot = DEG_tot[genes_common, "avg_log2FC"], genes = genes_common)
+ggplot(df_l2FC, aes(x=batch_12, y=tot, label = genes)) + geom_point() + coord_fixed() + xlim(-3,3) + ylim(-3, 3)+
+  stat_cor(method = "pearson")#+
+  #geom_text_repel()
+
+ggsave(paste0(path, "img/3D_workflow/cfr_1.png"))
+
+
+
+DEG_12batch %>%
+  filter(p_val_adj<0.01) -> DEG_12batch_filtered
+
+DEG_tot %>%
+  filter(p_val_adj<0.01) -> DEG_tot_filtered
+
+genes_common = intersect(rownames(DEG_12batch_filtered), rownames(DEG_tot_filtered))
+df_l2FC = data.frame(batch_12 = DEG_12batch_filtered[genes_common, "avg_log2FC"], tot = DEG_tot_filtered[genes_common, "avg_log2FC"], genes = genes_common)
+
+ggplot(df_l2FC, aes(x=batch_12, y=tot, label = genes)) + geom_point() + coord_fixed() + xlim(-3,3) + ylim(-3, 3)+
+  geom_text_repel()+
+   stat_cor(method = "pearson")
+
+ggsave(paste0(path, "img/3D_workflow/cfr_2.png"))
+```
+
+```{r}
+gsea_12batch = gsea_function(DEG_12batch)
+saveRDS(gsea_12batch, paste0(path, "data/gsea_12batch.rds"))
+gsea_12batch = readRDS(paste0(path, "data/gsea_12batch.rds"))
+gsea_total = gsea_function(DEG_tot)
+saveRDS(gsea_total, paste0(path, "data/gsea_total.rds"))
+gsea_total = readRDS(paste0(path, "data/gsea_total.rds"))
+rownames(gsea_12batch[[1]]@result) = gsea_12batch[[1]]@result$Description
+rownames(gsea_total[[1]]@result) = gsea_total[[1]]@result$Description
+
+
+
+common_pathways = intersect(gsea_12batch[[1]]@result[, "Description"], gsea_total[[1]]@result[, "Description"]) 
+
+df_NES = data.frame(batch_12 = gsea_12batch[[1]]@result[common_pathways, "NES"], tot = gsea_total[[1]]@result[common_pathways, "NES"])
+rownames(df_NES) = common_pathways
+
+df_NES <- df_NES %>%
+  mutate(groups_pathways = case_when(
+    batch_12 > 0 & tot > 0 ~ "up-up",
+    batch_12 < 0 & tot < 0 ~ "down-down",
+    batch_12 > 0 & tot < 0 ~ "up-down",
+    batch_12 < 0 & tot > 0 ~ "down-up",
+    TRUE ~ NA_character_ # Default case for unmatched rows
+  ))
+df_NES$groups_pathways = as.factor(df_NES$groups_pathways)
+
+ggplot(df_NES, aes(x=batch_12, y=tot, colour = groups_pathways)) + geom_point() + coord_fixed() #+ xlim(-3,3) + ylim(-3, 3)
+ggsave(paste0(path, "img/3D_workflow/cfr_3.png"))
+
+
+common_pathways = intersect(gsea_12batch[[1]]@result[gsea_12batch[[1]]@result$p.adjust < 0.05, "Description"], gsea_total[[1]]@result[gsea_total[[1]]@result$p.adjust < 0.05, "Description"]) 
+
+df_NES = data.frame(batch_12 = gsea_12batch[[1]]@result[common_pathways, "NES"], tot = gsea_total[[1]]@result[common_pathways, "NES"], padj_12 = gsea_12batch[[1]]@result[common_pathways, "p.adjust"], padj_tot = gsea_total[[1]]@result[common_pathways, "p.adjust"])
+rownames(df_NES) = common_pathways
+
+df_NES <- df_NES %>%
+  mutate(groups_pathways = case_when(
+    batch_12 > 0 & tot > 0 ~ "up-up",
+    batch_12 < 0 & tot < 0 ~ "down-down",
+    batch_12 > 0 & tot < 0 ~ "up-down",
+    batch_12 < 0 & tot > 0 ~ "down-up",
+    TRUE ~ NA_character_ # Default case for unmatched rows
+  ))
+df_NES$groups_pathways = as.factor(df_NES$groups_pathways)
+df_NES$pathway = ifelse(df_NES$groups_pathways == "up-up", rownames(df_NES), NA)
+
+ggplot(df_NES, aes(x=batch_12, y=tot, colour = groups_pathways, label = pathway)) + geom_point() + coord_fixed()+
+  geom_text_repel() #+ xlim(-3,3) + ylim(-3, 3)
+ggsave(paste0(path, "img/3D_workflow/cfr_4.png"))
+```
+
+```{r}
+df_NES[df_NES$groups_pathways == "down-up",]
+df_NES[df_NES$groups_pathways == "up-down",]
+df_NES[df_NES$groups_pathways == "up-up",]
+df_NES[df_NES$groups_pathways == "down-down",]
+```
+
+## MERGE 
+
+```{r}
+harmony_spatialPCA_3D$merged_clusters = rep("0", dim(harmony_spatialPCA_3D)[2])
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 0] = "Parenchyma"
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 1] = "Parenchyma"
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 2] = "Airways"
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 3] = "Granuloma-like"
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 4] = "Sub_mucosal"
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 5] = "Granuloma-like"
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 6] = "Parenchyma"
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 7] = "Airways"
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 8] = "Airways"
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 9] = "Parenchyma"
+harmony_spatialPCA_3D$merged_clusters[harmony_spatialPCA_3D$seurat_clusters == 10] = "Low-quality"
+
+
+
+table(harmony_spatialPCA_3D$merged_clusters)
+
+```
+```{r}
+infected_aligned$merged_clusters = as.vector(harmony_spatialPCA_3D$merged_clusters[colnames(infected_aligned)])
+infected_aligned$merged_clusters = ifelse(is.na(infected_aligned$merged_clusters), "Airways-containing beads", infected_aligned$merged_clusters)
+table(infected_aligned$merged_clusters)
+```
+
+```{r}
+infected_aligned$seurat_clusters = as.vector(harmony_spatialPCA_3D$seurat_clusters[colnames(infected_aligned)])
+infected_aligned$seurat_clusters = ifelse(is.na(infected_aligned$seurat_clusters), "Airways-containing beads", infected_aligned$seurat_clusters)
+table(infected_aligned$seurat_clusters)
+
+
+infected_aligned$merged_clusters = as.vector(harmony_spatialPCA_3D$merged_clusters[colnames(infected_aligned)])
+infected_aligned$merged_clusters = ifelse(is.na(infected_aligned$merged_clusters), "Airways-containing beads", infected_aligned$merged_clusters)
+table(infected_aligned$merged_clusters)
+```
+
+```{r}
+saveRDS(infected_aligned, paste0(path, "data/infected_aligned.rds"))
+#infected_aligned = readRDS(paste0(path, "data/infected_aligned.rds"))
+saveRDS(harmony_spatialPCA_3D, paste0(path, "data/harmony_spatialPCA_3D.rds"))
+#harmony_spatialPCA_3D = readRDS(paste0(path, "data/harmony_spatialPCA_3D.rds"))
+```
+
+## FILTERED (NO LOW-QUALITY)
+
+
+
+```{r, warning = TRUE}
+dim(harmony_spatialPCA_3D)
+harmony_spatialPCA_3D = harmony_spatialPCA_3D[, harmony_spatialPCA_3D$merged_clusters != "Low-quality" ]
+dim(harmony_spatialPCA_3D)
+
+
+infected_aligned = infected_aligned[, infected_aligned$merged_clusters != "Low-quality" ]
+```
+```{r}
+DimPlot(harmony_spatialPCA_3D, cols = cols_merged, group.by = "merged_clusters")
+ggsave(paste0(path, "img/3D_workflow/post_0.png"))
+```
+
+```{r, fig.height=6, fig.width = 10}
+SpatialDimPlot(infected_aligned, ncol = 4, group.by = "merged_clusters", cols = cols_merged) & NoLegend() #+ plot_layout(guides = "collect")#& NoLegend()
+ggsave(paste0(path, "img/3D_workflow/post_1.png"), width = 10, height = 6)
+```
+```{r}
+infected_aligned$my_clusters = infected_aligned$merged_clusters
+ordered_cl = rev(hierarchical_order_clusters(data = infected_aligned, scale_by = "column", macro = FALSE, name = "img/3D_workflow/clusters.png"))
+
+Idents(infected_aligned) = factor(infected_aligned$merged_clusters, levels = ordered_cl)
+```
+
+```{r, fig.height=10, fig.width=13}
+# MARKERS
+
+infected_aligned = PrepSCTFindMarkers(infected_aligned)
+markers_clusters_tot <- FindAllMarkers(infected_aligned, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+saveRDS(markers_clusters_tot, file = paste0(path, "data/markers_merged.rds")) 
+markers_clusters_tot = readRDS(paste0(path, "data/markers_merged.rds")) 
+
+library(xlsx)
+write.xlsx(markers_clusters_tot, paste0(path, "data/markers_merged.xlsx"))
+```
+
+```{r}
+# granuloma
+markers_clusters_tot[grep("Nos2", markers_clusters_tot$gene), ]
+markers_clusters_tot[grep("Cd68", markers_clusters_tot$gene), ]
+
+# sub-mucosal
+markers_clusters_tot[grep("Col1a1", markers_clusters_tot$gene), ]
+#markers_clusters_tot[grep("Muc5b", markers_clusters_tot$gene), ]
+
+#parenchyma
+markers_clusters_tot[grep("Hopx", markers_clusters_tot$gene), ]
+markers_clusters_tot[grep("Sftpc", markers_clusters_tot$gene), ]
+
+# airways
+markers_clusters_tot[grep("Foxj1", markers_clusters_tot$gene), ]
+markers_clusters_tot[grep("Acta2", markers_clusters_tot$gene), ]
+
+```
+
+```{r, fig.width=10, fig.height= 12}
+# HEATMAP 
+
+markers_clusters_filtered = markers_clusters_tot[markers_clusters_tot$gene %in% rownames(infected_aligned@assays$SCT$scale.data), ]
+markers_clusters_filtered %>%
+  filter(p_val_adj < 0.01) %>%
+  group_by(cluster) %>%
+  top_n(n = 8, wt = avg_log2FC) -> top_markers
+p1 = DoHeatmap(infected_aligned, features = top_markers$gene, assay = "SCT", group.colors = cols_merged)+ guides(color = "none") + theme(axis.text.y = element_text(size = 8)) #& NoLegend()
+p1
+ggsave(paste0(path, "img/3D_workflow/post_2.png"), width = 10, height = 12)
+```
+
+```{r, fig.height=10, fig.width = 10}
+# ORA ENRICHMENT UP E DOWN
+cl = ordered_cl
+# per scegliere threshold
+DEGS_density = split(markers_clusters_tot, markers_clusters_tot$cluster)
+lapply(DEGS_density, function(df) {
+  mm = return_valid_markers(df, logFC = 1, padj = 1e-2, type = "up")
+  dim(mm)
+})
+
+valid_markers_up = lapply(DEGS_density, function(df) {
+  mm = return_valid_markers(df, logFC = 1, padj = 1e-2, type = "up")
+  rownames(mm)
+  
+})
+names(valid_markers_up) = c(paste0("cl_", cl))
+
+ego = ORA_enrich(valid_markers_up)
+write.xlsx(ego[[1]]@compareClusterResult, paste0(path, "data/merged_ORA.xlsx"))
+ego[[2]]
+dotplot(ego[[1]], showCategory=5, label_format = 70) + theme(axis.text.y = element_text(size = 12), axis.text.x = element_text(angle = 30, vjust = 1, hjust=1)) #+ ggtitle(title_ora)
+ggsave(paste0(path, "img/3D_workflow/post_3.png"), height = 10, width = 10)
+
+```
+
+```{r}
+infected_aligned$my_clusters = infected_aligned$merged_clusters
+cc = composition_clusters(infected_aligned, col_cl = cols_merged, col_vetrini = col_samples, cl = names(cols_merged)) 
+cc[[2]]
+ggsave(paste0(path, "img/3D_workflow/post_4.png"))#, width = 10, height = 10)
+cc[[3]]
+ggsave(paste0(path, "img/3D_workflow/post_5.png"))#, height = 10, width = 10)
+```
+
+```{r, fig.width=10, fig.height=4}
+
+
+pp = deconv_barplots(infected_aligned, cl = ordered_cl)
+pp[[1]] + theme(axis.text.x = element_text(angle = 90, vjust = 0.8, hjust=0.85, size = 11), strip.text =  element_blank(), axis.title.x = element_blank()) 
+ggsave(paste0(path, "img/3D_workflow/post_6.png"), width = 10, height = 4)
+
+pp[[3]]
+ggsave(paste0(path, "img/3D_workflow/post_8.png"), width = 10, height = 4)
+
+
+```
+
+```{r, fig.width=8, fig.height=5}
+pp[[2]] + theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1, size = 12), strip.text = element_text(size = 5)) 
+ggsave(paste0(path, "img/3D_workflow/post_7.png"), width = 8, height = 5)
+
+pp[[4]] + theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1, size = 12), strip.text = element_text(size = 5)) 
+ggsave(paste0(path, "img/3D_workflow/post_9.png"), width = 8, height = 3)
+```
+
+
+
+
+
+
+## 3D umap pre
+
+```{r}
+harmony_spatialPCA_3D = RunUMAP(harmony_spatialPCA_3D, dims = 1:20, n.components = 3L, reduction = 'harmony')
+```
+
+```{r}
+DimPlot(harmony_spatialPCA_3D, dims = 2:1, cols = cols_cl_tot, label = T, label.box = T)
+DimPlot(harmony_spatialPCA_3D, dims = 2:3, cols = cols_cl_tot, label = T, label.box = T)
+```
+
+```{r}
+color_umap_3d = function(coor, cl, col, alpha = .5){
+  #coor_2d = coor[coor$clusters %in% cl, ]
+  coor_2d = coor
+  coor_2d$clusters = as.character(factor(coor_2d$clusters, levels = names(col)))
+  coor_2d$point_size = as.numeric(ifelse(coor_2d$clusters %in% cl, 12, 0.001))
+  #coor_2d$to_plot = ifelse(coor_2d$clusters %in% cl, coor_2d$clusters, "other")
+  coor_2d$to_plot = coor_2d$clusters#factor(coor_2d$to_plot, levels
+  
+xx = plot_ly() %>%
+  layout(showlegend = FALSE,
+    scene = list(aspectmode='manual',
+                 aspectratio = list(x=5*scale, y=5*scale, z=scale*5), 
+                 camera = list(
+                   eye = list(x = 0, y = 2.5, z = 2.5), # Adjust the camera position for desired angle
+                   up = list(x=-1, y=0, z=0)
+                   ),
+                 xaxis = axx, yaxis = axx, zaxis = axx
+      )
+    ) %>%
+ #layout(scene = list(xaxis=list(nticks = 4, range = c(0, 6000)),yaxis=list(nticks = 4, range = c(0, 6000)),zaxis=list(nticks = 4, range = c(0, 500)))) %>%
+ # add_trace(x = coor_3d$x, y = coor_3d$y, z = coor_3d$z, type = "scatter3d", mode = "markers", marker = list(color = "black", size = 1)) %>%
+  add_trace(x = coor_2d$x, y = coor_2d$y, z = coor_2d$z, color = as.numeric(coor_2d$to_plot), type = "scatter3d", 
+           # size = coor_2d$point_size, 
+           # sizes = coor_2d$point_size, 
+            mode = "markers", 
+           colors = c(col), #pch = 19,
+           opacity = alpha, marker = list( 
+      opacity = 1, #pch = 19,
+      color = as.numeric(coor_2d$to_plot),
+      size = coor_2d$point_size,
+      sizes = coor_2d$point_size, #c("0" = 5, "other"= 0.5),
+      colors = c(col), 
+      #showlegend = FALSE, 
+      colorbar = list(title = NULL),    # Disable color bar legend
+      showscale = FALSE   # Explicitly remove color scale
+      ), showlegend = FALSE)
+
+return(xx)
+}
+```
+
+```{r}
+coor = data.frame(harmony_spatialPCA_3D@reductions$umap@cell.embeddings, clusters = harmony_spatialPCA_3D$seurat_clusters)
+colnames(coor)[1:3] = c("x", "y", "z")
+color_umap_3d(coor = coor, cl = 0:10, col = cols_cl_tot, alpha = 1)
+```
+
+
+## markers 3D
+
+```{r}
+coords_list <- lapply(infected_aligned@images, function(df) {
+  df@coordinates[, c("tissue_x", "tissue_y", "z")]
+})
+
+df_coords <- do.call(rbind, coords_list)
+colnames(df_coords) = c("x", "y", "z")
+df_coords$x = df_coords$x * 10
+df_coords$y = df_coords$y * 10
+rownames(df_coords) = substr(rownames(df_coords), 4, nchar(rownames(df_coords)))
+#df_coords$sample = filtered_spatialPCA_2$orig.ident
+#df_coords$gran = granuloma_data$granuloma_class
+df_coords$clusters = infected_aligned$merged_clusters
+
+```
+
+```{r}
+color_cluster_3d(df_coords, names(cols_merged), col = cols_merged)
+```
+
+```{r}
+p = list()
+cl = names(cols_merged)
+for (i in 1:length(cl)){
+  p[[i]] = color_cluster_3d(df_coords, cl[i], col = cols_merged[cl[i]])
+}
+```
+
+```{r}
+p[[1]]
+p[[2]]
+p[[3]]
+p[[4]]
+p[[5]]
+```
+
+```{r}
+all(colnames(infected_aligned_filtered) == rownames(df_coords))
+for (i in 1: length(cl)){
+    name = paste0("markers_", cl[i], "1")
+    df_coords[[name]] = infected_aligned_filtered@meta.data[[name]]#[rownames(df_coords)]
+      }
+```
+
+```{r}
+color_continuous = function(coor, var, min_cutoff=NA, max_cutoff=NA){
+  coor_2d = coor
+  coor_2d$to_plot = coor_2d[[var]]
+  if (!is.na(min_cutoff)){
+    coor_2d$to_plot = ifelse(coor_2d[[var]] < min_cutoff, "texture", coor_2d$to_plot)
+  }
+  if (! is.na(max_cutoff)){
+     coor_2d$to_plot = ifelse(coor_2d[[var]] > max_cutoff, max_cutoff, coor_2d$to_plot)
+  }
+  
+  texture = coor_2d[coor_2d$to_plot == "texture", ]
+  dd = coor_2d[coor_2d$to_plot != "texture", ]
+  dd$to_plot = as.numeric(dd$to_plot)
+  
+  dd$point_size = 1 +(20-1) * (dd$to_plot - min(dd$to_plot)) / (max(dd$to_plot) - min(dd$to_plot))
+  
+
+xx = plot_ly() %>%
+  layout(
+    scene = list(aspectmode='manual',
+                 aspectratio = list(x=5*scale, y=5*scale, z=0.08*scale*1.5), 
+                 camera = list(
+                   eye = list(x = 0, y = 2.5, z = 2.5), # Adjust the camera position for desired angle
+                   up = list(x=-1, y=0, z=0)
+                   ),
+                 xaxis = axx, yaxis = axx, zaxis = axx
+                 )
+    ) %>%
+    add_trace(x = texture$x, y = texture$y, z = texture$z, type = "scatter3d", 
+              colors = "black", size = 0.8, opacity = 0.5, mode = "markers", 
+              marker = list( 
+      opacity = 0.3, 
+      size = 0.8, 
+      color = "black",
+      colors = "black")
+      ) %>%
+  add_trace(x = dd$x, y = dd$y, z = dd$z, color = dd$to_plot, type = "scatter3d", mode = "markers", 
+            opacity = 0.3, 
+            size = dd$point_size, 
+            sizes = dd$point_size,
+            marker = list(
+      opacity = 0.5, 
+      #size = dd$point_size,
+      sizes = dd$point_size,
+      #colorbar = list(title = "Viridis"), 
+      colorscale = "Viridis"
+      ))
+
+return (xx)
+}
+
+```
+
+```{r}
+hist(df_coords$`markers_Airways-containing beads1`)
+color_continuous(df_coords, "markers_Airways-containing beads1", min_cutoff=0.4, max_cutoff=1)
+```
+
+```{r}
+hist(df_coords$markers_Airways1)
+color_continuous(df_coords, "markers_Airways1", min_cutoff=0.5, max_cutoff=2.3)
+```
+
+```{r}
+hist(df_coords$`markers_Granuloma-like1`)
+color_continuous(df_coords, "markers_Granuloma-like1", min_cutoff=0.5, max_cutoff=1.5)
+```
+
+```{r}
+hist(df_coords$markers_Sub_mucosal1)
+color_continuous(df_coords, "markers_Sub_mucosal1", min_cutoff=0.6, max_cutoff=2.6)
+```
+
+```{r}
+hist(df_coords$markers_Inflammed_regions1)
+color_continuous(df_coords, "markers_Inflammed_regions1", min_cutoff=0.3, max_cutoff=1)
+```
+
+```{r}
+hist(df_coords$markers_Parenchyma1)
+color_continuous(df_coords, "markers_Parenchyma1", min_cutoff=0.2, max_cutoff=1.3)
+```
+
+## MABS WITHIN CLUSTERS, INOS
+
+```{r}
+cols_geni_batterici = c("#D95F02","#1B9E77", "lavenderblush1")
+names(cols_geni_batterici) = c("lsr2+", "lsr2-", "no_mabs")
+
+cols_mabs = c("firebrick3", "lavenderblush1")
+names(cols_mabs) = c("MABS", "no_mabs")
+
+cols_rpoB_lsr2 = c("#D95F02","#1B9E77")
+names(cols_rpoB_lsr2) = c("lsr2", "rpoB")
+```
+
+```{r}
+mmGODB = read.csv("/beegfs/scratch/ric.cirillo.transcriptomics/ric.cirillo.transcriptomics/Progetti_Lore/mmGODB.csv", sep = ";")
+iNOS = mmGODB$ID[grep('nitric oxide biosynthetic process', mmGODB$GO)]
+iNOS = iNOS[1]   #nitric oxide biosynthetic process, quello con 35 non unique genes
+iNOS = unique(unlist(strsplit(iNOS,split = '\t')))
+iNOS = intersect(iNOS, rownames(infected_aligned))
+
+#infected_aligned = readRDS(paste0(path, "data/infected_aligned.rds"))
+infected_aligned  = AddModuleScore(infected_aligned, list(iNOS), name = "iNOS_pathway", assay = "SCT", slot = "data")
+```
+
+```{r}
+df = data.frame(  MABS_presence = infected_aligned$MABS_presence, MABS_type = infected_aligned$MABS_type, MABS_tot = infected_aligned$MABS_tot, clusters = infected_aligned$merged_clusters, sample = infected_aligned$orig.ident, INOS = infected_aligned$iNOS_pathway1)
+```
+
+
+```{r, fig.width = 10, fig.height=4}
+
+# MABS PRESENCE/ABSENCE
+ggplot(df, aes(x=MABS_presence, y= INOS, fill = MABS_presence)) + 
+  geom_violin(trim = FALSE) +
+  ggtitle("iNOS pathway") +
+ylab("iNOS genes module score") +
+geom_signif(
+    comparisons = list(c("MABS", "no_mabs")),
+    map_signif_level = TRUE
+  ) +
+  scale_fill_manual(values=cols_mabs)+
+ geom_boxplot(width=0.1) +
+  facet_grid(~ clusters, switch = "x") +
+  theme(axis.text.x = element_blank(), strip.text = element_text(size = 6)) 
+
+ggsave(paste0(path, "img/interaction/violins_9.png"), width = 10, height = 4)
+
+
+# ALL MABS
+ggplot(df, aes(x=MABS_tot, y= INOS, fill = MABS_tot)) + 
+  geom_violin(trim = FALSE) +
+  ggtitle("iNOS pathway") +
+ylab("iNOS genes module score") +
+geom_signif(
+    comparisons = list(c("MABS", "no_mabs")),
+    map_signif_level = TRUE
+  ) +
+  scale_fill_manual(values=cols_mabs)+
+ geom_boxplot(width=0.1) +
+  facet_grid(~ clusters, switch = "x") +
+  theme(axis.text.x = element_blank(), strip.text = element_text(size = 6)) 
+
+
+# LSR2 VS RPOB
+ggplot(df[df$MABS_presence != "no_mabs", ], aes(x=MABS_type, y=INOS, fill = MABS_type)) + 
+  geom_violin(trim = FALSE) +
+  ggtitle("iNOS pathway") +
+ylab("iNOS genes module score") +
+geom_signif(
+    comparisons = list(c("lsr2+", "lsr2-")),
+    map_signif_level = TRUE
+  ) +
+  scale_fill_manual(values=cols_geni_batterici)+
+ geom_boxplot(width=0.1) +
+  facet_grid(~ clusters, switch = "x") +
+  theme(axis.text.x = element_blank(), strip.text = element_text(size = 6)) 
+
+ggsave(paste0(path, "img/interaction/violins_10.png"), width = 10, height = 4)
+
+
+```
+
+```{r}
+bacterial_genes_per_cluster = function(data, cl){
+
+df_mabs = data.frame()
+df_mabs_ratio = data.frame()
+for (i in 1: length(cl)){
+  xx = data[, data$my_clusters == cl[i]]
+  r = data.frame("number_spots" = sum(xx$rpoB_counts > 0), "perc_spots" = sum(xx$rpoB_counts > 0)/length(xx$rpoB_counts), "gene" = "rpoB", "sample" = cl[i], "counts" = sum(xx$rpoB_counts))
+  r = data.frame("number_spots" = sum(xx$MABS_type == "lsr2-"), "perc_spots" = sum(xx$MABS_type == "lsr2-")/length(xx$rpoB_counts), "gene" = "rpoB", "sample" = cl[i], "counts" = sum(xx$rpoB_counts))
+  l = data.frame("number_spots" = sum(xx$lsr2_counts > 0), "perc_spots" = sum(xx$lsr2_counts > 0)/length(xx$lsr2_counts), "gene" = "lsr2", "sample" = cl[i], "counts" = xx$lsr2_counts)
+  l = data.frame("number_spots" = sum(xx$MABS_type == "lsr2+"), "perc_spots" = sum(xx$MABS_type == "lsr2+")/length(xx$lsr2_counts), "gene" = "lsr2", "sample" = cl[i], "counts" = xx$lsr2_counts)
+	df_mabs = rbind(df_mabs, rbind(r, l))
+	
+	ratio_rpoB_lsr2 = data.frame("spots_ratio" = r$number_spots/l$number_spots, "perc_ratio" = r$perc_spots/l$perc_spots, "sample" = cl[i], "counts_ratio" = r$counts/l$counts)
+	df_mabs_ratio = rbind(df_mabs_ratio, ratio_rpoB_lsr2)
+}
+	
+    
+df_mabs$number_spots = as.numeric(df_mabs$number_spots)
+df_mabs$perc_spots = as.numeric(df_mabs$perc_spots)
+df_mabs$gene = factor(df_mabs$gene, levels = names(cols_rpoB_lsr2))
+df_mabs_ratio$spots_ratio = as.numeric(df_mabs_ratio$spots_ratio)
+df_mabs_ratio$perc_ratio = as.numeric(df_mabs_ratio$perc_ratio)
+df_mabs$sample = factor(df_mabs$sample, levels = cl)
+
+
+g1 = ggplot(data=df_mabs, aes(x = sample, y=number_spots, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("# of spots") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2)
+#ggsave(paste0(path, "img/MABS_3.png"))#, height=10, width=10)
+
+g2 = ggplot(data=df_mabs, aes(x=sample, y=perc_spots, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("% of spots per slice") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2)
+#ggsave(paste0(path, "img/MABS_4.png"))
+
+g3 = ggplot(data=df_mabs_ratio, aes(x=sample, y=spots_ratio)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("ratio") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("rpoB/lsr2 number of spots")
+#ggsave(paste0(path, "img/MABS_5.png"))
+
+g4 = ggplot(data=df_mabs, aes(x = sample, y=counts, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("# of counts") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2)
+#ggsave(paste0(path, "img/MABS_6.png"))#, height=10, width=10)
+
+return(list(g1, g2, g3, g4))
+}
+```
+
+```{r}
+infected_aligned$my_clusters = infected_aligned$merged_clusters
+cc = bacterial_genes_per_cluster(infected_aligned, cl = unique(infected_aligned$merged_clusters))
+cc[[1]] + theme(axis.text.x = element_text(angle = 30, size = 12, hjust = 1, vjust = 1))
+```
+

@@ -1,0 +1,1498 @@
+---
+title: "granuloma"
+author: "Gaia Saldarini"
+date: "2024-11-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## LIBRARY & COLORS
+
+```{r, echo=FALSE, message=FALSE, warning = FALSE}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(stringr)
+library(ggrepel)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggsignif)
+library(readr)
+library(spacexr)
+library(scatterpie)
+library(pheatmap)
+library(SpatialPCA)
+library(glmGamPoi)
+library(harmony)
+library(presto)
+library(igraph)
+library(plotly)
+library(ComplexHeatmap)
+library(circlize)
+library(tidyr)
+library(tibble)
+library(igraph)
+library(plotly)
+library(DESeq2)
+```
+
+```{r}
+path = "/beegfs/scratch/ric.hsr/Gaia_saldarini/FINAL/"
+```
+
+```{r}
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+cols_samples = brewer.pal(7, "Reds")
+names(cols_samples) = samples_infected
+```
+
+```{r}
+gran_gen_col = c("ghostwhite", "chartreuse1","blue", "cyan", "firebrick","darkorchid","yellow", "deeppink1","darkorange","peachpuff")
+names(gran_gen_col) = c("0", "A", "B", "C", "D", "E", "F", "G", "H", "other")
+```
+
+```{r}
+cols_cl_gran =  brewer.pal(6, name = "Set1")
+names(cols_cl_gran) = c(0, 1, 2, 3, 4, 5)
+```
+
+```{r}
+cols_celltypes <- c(
+        "Alveolar epithelial cells" = "#780116",
+        "Club cells" = "#f7b538",
+        "Fibroblast" = "red",
+        "Endothelial cells" = "yellow",
+        
+        "Monocytes" = "#a9d6e5",
+        "Macrophages" = "#0496ff",
+        "Dendritic cells" = "blue",
+        "Neutrophils" = "#7DF3FF",
+        
+        "B cells" = "black",
+        "T cells" = "grey",
+        
+        "NK cells" = "#6f2dbd",
+        "Erythrocytes" = "#f896d8")
+```
+
+```{r}
+list_macro = list(stromal = c("Alveolar epithelial cells", "Club cells", "Fibroblast", "Endothelial cells", "Erythrocytes"), myeloid = c("Monocytes", "Macrophages", "Dendritic cells", "Neutrophils"), lymphoid = c("B cells", "T cells", "NK cells"))
+
+cols_macro = c( "tan1", "dodgerblue", "snow4")
+names(cols_macro) = c("stromal", "myeloid", "lymphoid")
+
+```
+
+## FUNCTIONS
+
+```{r}
+return_valid_markers = function(x, padj = 0.1, logFC = 1, type = "up", n = NA){
+
+  if (type == "up"){
+   x %>%
+  filter(avg_log2FC > logFC) %>%
+  filter(p_val_adj < padj)  -> valid_markers 
+    
+    if (!is.na(n)){
+    valid_markers %>%
+      group_by(cluster) %>%
+      slice_max(order_by = avg_log2FC, n = n) %>% 
+      ungroup() -> valid_markers
+    }
+  } else if (type == "down"){
+    x %>%
+  filter(avg_log2FC < logFC) %>%
+  filter(p_val_adj < padj)  -> valid_markers
+    
+    if (!is.na(n)){
+    valid_markers %>%
+      group_by(cluster) %>%
+      slice_max(order_by = - avg_log2FC, n = n) %>% 
+      ungroup() -> valid_markers
+    }
+  }
+  
+   return (valid_markers)
+}
+
+
+```
+
+```{r}
+ORA_enrich = function(markers){
+  ego_terms = compareCluster(geneClusters = markers, fun = enrichGO, OrgDb='org.Mm.eg.db', keyType="SYMBOL", ont = "BP")
+  ego_terms = clusterProfiler::simplify(ego_terms)
+  p = dotplot(ego_terms, showCategory=10, label_format = 70) + theme(axis.text.y = element_text(size = 8), axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5)) #+ ggtitle(title_ora)
+  return (list(ego_terms, p))
+}
+```
+
+
+
+```{r}
+gsea_function = function(DEGS){
+	
+	  original_gene_list <- DEGS$avg_log2FC
+  names(original_gene_list) <- rownames(DEGS)
+  gene_list<-na.omit(original_gene_list)
+  gene_list = sort(gene_list, decreasing = TRUE)
+  gsea <- gseGO(geneList=gene_list, 
+             ont ="BP", 
+             keyType = "SYMBOL", 
+             #nPerm = 10000, 
+             minGSSize = 3, 
+             maxGSSize = 800, 
+             pvalueCutoff = 0.05, 
+             verbose = TRUE, 
+             OrgDb = "org.Mm.eg.db", 
+             pAdjustMethod = "none", 
+             eps = 1e-50)
+
+p1 = ridgeplot(gsea, label_format = 80) #+ ggtitle("GSEA - MABS lsr2+ vs MABS lsr2-")
+
+return(list(gsea, p1))
+}
+```
+
+```{r}
+composition_clusters = function(d, col_cl, col_vetrini, cl){   # cl sono i cluster in ordine! i levels
+
+d$my_clusters = factor(d$my_clusters, levels = cl)
+df_data = d[[c("my_clusters", "orig.ident")]]
+colnames(df_data) = c("cluster", "vetrino")
+
+composition_df <- df_data %>%
+  group_by(cluster, vetrino) %>%
+  summarise(num_spots = n(), .groups = 'drop')
+
+g1 = ggplot(data=composition_df, aes(x=cluster, y=num_spots, fill = vetrino)) +
+  geom_bar(stat="identity", position="stack") +
+  ylab("number of spots")+
+  scale_fill_manual(values = col_vetrini)
+  ggtitle("Clusters composition by slices [# of spots]")
+    
+
+g2 = ggplot(data=composition_df, aes(x=cluster, y=num_spots, fill= vetrino)) +
+  geom_bar(stat="identity", position="fill") +
+  ggtitle("Clusters composition by slices [% of spots over slice]") +
+  ylab("% of spots") +
+  scale_fill_manual(values = col_vetrini)
+  theme(panel.grid.minor = element_blank())
+
+g3 = ggplot(data=composition_df, aes(x=vetrino, y=num_spots, fill= cluster)) +
+  geom_bar(stat="identity", position="fill") +
+  ggtitle("Slices composition by Seurat clusters [% of spots per cluster]") +
+  xlab("slices")+
+  ylab("% of spots") +
+  scale_fill_manual(values = col_cl)
+theme(panel.grid.minor = element_blank())
+
+return(list(g1, g2, g3, composition_df))
+
+}
+```
+
+```{r}
+
+hierarchical_order_clusters = function(data, scale_by, macro = FALSE, name){
+
+Idents(data) = data$my_clusters
+rctd = as.matrix(data@assays$RCTD@data, dimnames = list(rownames(data@assays$RCTD@data), data$my_clusters))
+cl = unique(data$my_clusters)
+
+
+if (macro){
+
+rctd_macro = matrix(0, ncol = dim(rctd)[2], nrow = 3)
+rctd_macro[1,] = apply(rctd[list_macro$stromal, ], 2, median)
+rctd_macro[2,] = apply(rctd[list_macro$myeloid, ], 2, median)
+rctd_macro[3,] = apply(rctd[list_macro$lymphoid, ], 2, median)
+colnames(rctd_macro) = colnames(rctd)
+rownames(rctd_macro) = names(list_macro)
+rctd = rctd_macro
+}
+
+
+
+clusters_celltypes_list = lapply(cl, function(x){ 
+  spots = colnames(data)[data$my_clusters == x]
+  apply(rctd[, spots], 1, median)
+  })
+names(clusters_celltypes_list) = cl
+clusters_celltypes <- do.call(cbind, clusters_celltypes_list)
+
+ph = pheatmap::pheatmap(clusters_celltypes, cluster_cols = TRUE, cluster_rows = FALSE, breaks = seq(-1,1,length.out=101), color = colorRampPalette(c('blue','white','red'))(100), scale = scale_by, filename = paste0(path, name), width = 6, height = 7, angle_col = 90, cellheight = 20, cellwidth = 20)
+
+ordered_cl = colnames(clusters_celltypes)[ph$tree_col$order]
+#cl = rev(ordered_cl)
+
+return (ordered_cl)
+}
+
+```
+
+```{r}
+deconv_barplots = function(data, cl){
+  
+samples = unique(data$orig.ident)
+x = t(data@assays$RCTD$data)
+
+df <- as.data.frame(x) %>%
+  rownames_to_column(var = "vertex") %>%  # Move row names (cell types) to a column
+  pivot_longer(cols = -vertex, 
+               names_to = "cell_type", 
+               values_to = "fraction")
+df$sample = data$orig.ident[df$vertex]
+df$my_clusters = data$my_clusters[df$vertex]
+  
+df$my_clusters = factor(df$my_clusters, levels = cl) 
+df$fraction = round(df$fraction, 3)
+df$cell_type = factor(df$cell_type, levels = names(cols_celltypes))
+
+g1 = ggplot(df, aes(fill=cell_type, y=fraction, x=sample)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5, size = 5),
+        strip.text = element_text(size = 6))+
+  scale_fill_manual(values=cols_celltypes)# +
+
+g2 = ggplot(df, aes(fill=cell_type, y=fraction, x=my_clusters)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  #facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  scale_fill_manual(values=cols_celltypes)# +
+
+df$macro_celltype = ifelse(df$cell_type %in% list_macro$stromal, "stromal", ifelse(df$cell_type %in% list_macro$myeloid, "myeloid", "lymphoid"))
+df$macro_celltype = factor(df$macro_celltype, levels = names(cols_macro))
+
+g3 = ggplot(df, aes(fill=macro_celltype, y=fraction, x=sample)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5, size = 5),
+        strip.text = element_text(size = 6))+
+  scale_fill_manual(values=cols_macro)
+
+g4 = ggplot(df, aes(fill=macro_celltype, y=fraction, x=my_clusters)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  #facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  scale_fill_manual(values=cols_macro)
+
+celltypes_filtered = c("Alveolar epithelial cells", "B cells", "Dendritic cells", "Macrophages", "Monocytes", "T cells", "Endothelial cells")
+df = df[df$cell_type %in% celltypes_filtered, ]
+
+g5 = ggplot(df, aes(x = cell_type, y = fraction, fill = my_clusters)) +
+  geom_boxplot(outliers = FALSE) + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+	scale_fill_manual(values=cols_cl_gran)
+
+g6 = ggplot(df, aes(x = my_clusters, y = fraction, fill = cell_type)) +
+  geom_boxplot(outliers = FALSE) + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+	scale_fill_manual(values=cols_celltypes)
+
+  return (list(g1, g2, g3, g4, g5, g6))
+}
+```
+
+
+## GRANULOMI
+
+```{r}
+infected_aligned = readRDS(paste0(path, "data/infected_aligned.rds"))
+```
+
+```{r, warning = FALSE}
+
+granuloma_data = infected_aligned[, infected_aligned$merged_clusters == "Granuloma-like"]
+
+```
+
+
+```{r, fig.height=6, fig.width=10}
+reds = rep("red2", 7)
+names(reds) = samples_infected
+SpatialDimPlot(granuloma_data, group.by = "orig.ident", ncol = 4, alpha = 0.3, crop = FALSE, cols = reds) & NoLegend()
+ggsave(paste0(path, "img/granuloma/gran_1.png"), height = 6, width = 8)
+```
+
+```{r}
+
+
+granuloma_data$granuloma_class = "other"
+
+coords_list <- lapply(granuloma_data@images, function(df) {
+  df@coordinates[, c("row_aligned", "col_aligned")]
+})
+
+# Combina tutte le colonne usando cbind
+combined_coords <- do.call(rbind, coords_list)
+#combined_coords$sample = substr(rownames(combined_coords), 1, 2)
+rownames(combined_coords) = substr(rownames(combined_coords), 4, nchar(rownames(combined_coords)))
+df_coords = combined_coords
+
+A = colnames(granuloma_data)[ (df_coords$row_aligned > 15) & (df_coords$col_aligned > 105)]
+granuloma_data$granuloma_class[A] = "A"
+
+B = colnames(granuloma_data)[ (df_coords$row_aligned > 36) & (df_coords$col_aligned > 91)]
+granuloma_data$granuloma_class[B] = "B"
+
+C = colnames(granuloma_data)[ (df_coords$row_aligned > 50) & (df_coords$col_aligned > 46) & (df_coords$col_aligned < 80)]
+granuloma_data$granuloma_class[C] = "C"
+
+D = colnames(granuloma_data)[ (df_coords$row_aligned > 32) & (df_coords$col_aligned < 47)]
+granuloma_data$granuloma_class[D] = "D"
+
+E = colnames(granuloma_data)[(df_coords$row_aligned > 15) & (df_coords$row_aligned < 45) & (df_coords$col_aligned < 24)]
+granuloma_data$granuloma_class[E] = "E"
+
+f = colnames(granuloma_data)[ (df_coords$row_aligned > 8) & (df_coords$row_aligned < 35) & (df_coords$col_aligned > 23) & (df_coords$col_aligned < 63)]
+granuloma_data$granuloma_class[f] = "F"
+
+G = colnames(granuloma_data)[ (df_coords$row_aligned > (-3)) & (df_coords$row_aligned < 15) & (df_coords$col_aligned > 38) & (df_coords$col_aligned < 70)]
+granuloma_data$granuloma_class[G] = "G"
+
+H = colnames(granuloma_data)[ (df_coords$row_aligned < 3)  & (df_coords$col_aligned > 70) & (df_coords$col_aligned < 95)]
+granuloma_data$granuloma_class[H] = "H"
+```
+
+```{r, fig.height=6, fig.width=10}
+SpatialDimPlot(granuloma_data, group.by = "granuloma_class", ncol = 4, crop = FALSE, cols = gran_gen_col) & NoLegend() #+ plot_layout(guides = "collect")
+ggsave(paste0(path, "img/granuloma/gran_2.png"), height = 6, width = 10)
+``` 
+```{r}
+granuloma_data$my_clusters = granuloma_data$granuloma_class
+cc = composition_clusters(granuloma_data, col_cl = gran_gen_col, col_vetrini = cols_samples, names(gran_gen_col))
+cc[[1]]
+cc[[2]] +theme(axis.text.x = element_text(size = 14))
+ggsave(paste0(path, "img/granuloma/gran_3.png"))
+cc[[3]] +theme(axis.text.x = element_text(size = 14))
+ggsave(paste0(path, "img/granuloma/gran_4.png"))
+```
+
+## PCA HARMONY
+
+```{r, warning = FALSE, verbose = FALSE, message = FALSE}
+granuloma_data[["RNA"]] = granuloma_data[["Spatial"]]
+granuloma_data[["RNA"]] <- split(granuloma_data[["RNA"]], f = granuloma_data$orig.ident)
+DefaultAssay(granuloma_data) = "RNA"
+
+granuloma_data <- NormalizeData(granuloma_data)  # sep
+granuloma_data <- FindVariableFeatures(granuloma_data, nfeatures = 3000)   # sep
+granuloma_data <- ScaleData(granuloma_data)
+granuloma_data <- RunPCA(granuloma_data, assay = "RNA", verbose = FALSE) # boo?
+
+
+```
+
+```{r, warning = FALSE}
+granuloma_data <- IntegrateLayers(object = granuloma_data, method = HarmonyIntegration, orig.reduction = "pca",  new.reduction = "harmony", #normalization.method = "SCT", 
+                                     assay = "RNA",
+                        verbose = FALSE)
+
+granuloma_data[["RNA"]] <- JoinLayers(granuloma_data[["RNA"]])
+
+granuloma_data <- FindNeighbors(granuloma_data, reduction = "harmony", dims = 1:20)
+
+```
+
+```{r, fig.width=4, fig.height=3}
+
+res_par = seq(0.1, 1, length.out = 19)
+res_par
+sil_metric = NULL
+n_clusters = NULL
+dist.matrix <-dist(granuloma_data@reductions$harmony@cell.embeddings)
+x = granuloma_data
+
+#saveRDS(harmony_spatialPCA_3D, paste0(path, "data/spatialPCA_harmony_2810.rds"))
+for (i in 1:length(res_par)){
+  print(i)
+  name_cl = paste0("clusters_", res_par[i])
+  x = FindClusters(x, resolution = res_par[i], cluster.name = name_cl)
+  clusters <- x@meta.data[[name_cl]]
+  sil <- cluster::silhouette(x = as.numeric(as.factor(clusters)), dist = dist.matrix)
+  sil_metric[i] <-mean(sil[, 3])
+  n_clusters[i] = length(unique(x@meta.data[[name_cl]]))
+}
+
+sil_df = data.frame(silhouette = sil_metric, resolution = res_par, n_clusters = n_clusters)
+ggplot(sil_df, aes(x=resolution, y=silhouette)) +
+    geom_line() +
+    geom_point() +
+  geom_point(data=sil_df %>% filter(resolution == 0.3), 
+           pch=21, 
+           size=10, 
+           colour="red")
+
+ggsave(paste0(path, "img/granuloma/gran_5.png"))
+ggplot(sil_df, aes(x=resolution, y=n_clusters)) +
+    geom_line() +
+    geom_point() +
+  geom_point(data=sil_df %>% filter(resolution == 0.3), 
+           pch=21, 
+           size=10, 
+           colour="red")
+ggsave(paste0(path, "img/granuloma/gran_6.png"))
+dist.matrix = 0
+``` 
+
+```{r, warning = FALSE, verbose = FALSE, message = FALSE}
+granuloma_data <- FindClusters(granuloma_data, resolution = 0.3)  # 0.8 default
+granuloma_data <- RunUMAP(granuloma_data, dims = 1:20, reduction = "harmony")
+```
+
+```{r,  fig.height=6, fig.width=10}
+SpatialDimPlot(granuloma_data, ncol = 4, crop = FALSE, group.by = "RNA_snn_res.0.3", cols = cols_cl_gran) + plot_layout(guides = "collect")#, ) & NoLegend()
+table(granuloma_data$RNA_snn_res.0.3)
+```
+
+
+```{r}
+#,  fig.width = 10, fig.height = 5}
+DimPlot(granuloma_data, reduction = "umap", group.by = "seurat_clusters", cols = cols_cl_gran)
+ggsave(paste0(path, "img/granuloma/gran_8.png"))#, height = 5, width = 10)
+```
+
+```{r, fig.width = 8, fig.height = 5}
+
+
+
+DimPlot(granuloma_data, reduction = "umap", group.by = "seurat_clusters", split.by = "orig.ident", cols = cols_cl_gran, ncol= 4) & NoLegend()
+ggsave(paste0(path, "img/granuloma/gran_9.png"), height = 5, width = 8)
+```
+
+
+```{r}
+
+DimPlot(granuloma_data, reduction = "umap", group.by = "batch")
+ggsave(paste0(path, "img/granuloma/gran_10.png"))
+DimPlot(granuloma_data, reduction = "umap", group.by = "orig.ident", cols = cols_samples)
+ggsave(paste0(path, "img/granuloma/gran_11.png"))
+DimPlot(granuloma_data, reduction = "umap", split.by = "orig.ident", cols = cols_cl_gran, ncol = 4) & NoLegend()
+ggsave(paste0(path, "img/granuloma/gran_12.png"), height = 5, width = 10)
+DimPlot(granuloma_data, reduction = "umap", group.by = "granuloma_class", cols = gran_gen_col)
+ggsave(paste0(path, "img/granuloma/gran_13.png"))
+DimPlot(granuloma_data, reduction = "umap", split.by = "orig.ident", group.by = "granuloma_class", cols = gran_gen_col)
+```
+
+```{r, message = FALSE, verbose = FALSE}
+lev = c(5, 3, 1, 2, 0, 4)
+Idents(granuloma_data) = factor(granuloma_data$seurat_clusters, levels = lev)
+markers_granuloma_03 <- FindAllMarkers(granuloma_data, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25, group.by = "seurat_clusters") #RNA_snn_res.0.4") #seurat_clusters")
+```
+
+```{r, fig.height=10, fig.width = 10}
+markers_granuloma_03 %>%
+  filter(p_val_adj < 0.01) %>%
+  group_by(cluster) %>%
+  top_n(n = 4, wt = avg_log2FC) -> top_markers
+  
+DoHeatmap(granuloma_data, features = top_markers$gene, group.colors = cols_cl_gran[as.character(lev)], assay = "RNA", label = FALSE) + guides(color = "none") + theme(axis.text.y = element_text(size = 14)) 
+ggsave(paste0(path, "img/granuloma/gran_14.png"), height = 10, width = 10)
+
+```
+
+```{r}
+#saveRDS(granuloma_data, paste0(path, "data/granuloma_data.rds"))
+#granuloma_data = readRDS(paste0(path, "data/granuloma_data.rds"))
+```
+
+```{r, fig.height=8, fig.width = 12}
+#Idents(granuloma_data) = granuloma_data$RNA_snn_res.0.4
+cl = lev
+DEGS_density_num = split(markers_granuloma_03, markers_granuloma_03$cluster)
+
+lapply(DEGS_density_num, function(df) {
+  mm = return_valid_markers(df, padj = 1e-2, logFC = 0.5, type = "up", n = NA)
+  dim(mm)
+  
+})
+
+valid_markers_up_num = lapply(DEGS_density_num, function(df) {
+  mm = return_valid_markers(df, padj = 1e-2, logFC = 0.5, type = "up", n = NA)
+  rownames(mm)
+  
+})
+#names(valid_markers_up_num) = clusters_names
+#all(valid_markers_up_num[[1]] == valid_markers_up_num$`Granuloma-like structures`)
+lengths(valid_markers_up_num)
+aa = ORA_enrich(valid_markers_up_num)
+#table(aa[[1]]@compareClusterResult$Cluster)
+#aa[[1]]@compareClusterResult[aa[[1]]@compareClusterResult$Description %in% prova, ]
+#prova = grep(pattern = "chemot", aa[[1]]@compareClusterResult$Description, value = TRUE)
+#saveRDS(aa, paste0(path, "data/granuloma_ora.rds"))
+aa[[2]]
+ 
+prova = aa[[1]]@compareClusterResult  %>%
+group_by(Cluster) %>%
+  filter(p.adjust < 0.1)%>%
+slice_max(order_by = GeneRatio, n = 50)# %>%
+table(prova$Cluster)
+
+#saveRDS(aa[[1]], paste0(path, "data/prova_ora_gran.rds"))
+grep("tax", prova[prova$Cluster == "Infected area with chemotaxis markers", "Description"][[1]], value = TRUE)
+#bb <- subset(aa[[1]], compareClusterResult$Description != "renal system development")
+dotplot(aa[[1]], showCategory=3, label_format = 70) + theme(axis.text.y = element_text(size = 14), axis.text.x = element_text(angle = 30, vjust = 1, hjust=1, size = 14)) 
+ggsave(paste0(path, "img/granuloma/gran_15.png"), height = 8, width = 12)
+
+
+```
+```{r}
+clusters_names = c("High inflamed area", "Infected area with epithelial markers", "Infected area with chemotaxis markers", "Infected area with lymphocytes markers", "Super inflamed area", "Infected area with airways markers")
+names(clusters_names) = c(0, 2, 1, 3, 4, 5)
+cols_cl_gran =  brewer.pal(6, name = "Set1")
+names(cols_cl_gran)= clusters_names[as.character(0:5)]
+
+```
+
+```{r,  fig.height=6, fig.width=10}
+clusterss = clusters_names[as.character(unname(granuloma_data$RNA_snn_res.0.3))]
+names(clusterss) = colnames(granuloma_data)
+granuloma_data$seurat_clusters = factor(clusterss, levels = clusters_names)
+#granuloma_data$RNA_snn_res.0.3 = factor(granuloma_data$RNA_snn_res.0.3, levels = names(cols_gran_3))
+SpatialDimPlot(granuloma_data, ncol = 4, crop = FALSE, group.by = "seurat_clusters", cols = cols_cl_gran) & NoLegend() #+ plot_layout(guides = "collect")
+ggsave(paste0(path, "img/granuloma/gran_7.png"), height = 6, width = 10)
+```
+```{r}
+granuloma_data$my_clusters = granuloma_data$seurat_clusters
+ordered_cl= hierarchical_order_clusters(data = granuloma_data, scale_by = "column", macro = FALSE, name = "img/granuloma/prova.png")
+ordered_cl = clusters_names[as.character(lev)]
+granuloma_data$seurat_clusters = factor(granuloma_data$seurat_clusters, levels = ordered_cl)
+```
+
+
+
+
+```{r}
+granuloma_data$my_clusters = granuloma_data$seurat_clusters
+cc = composition_clusters(granuloma_data, col_cl = cols_cl_gran, col_vetrini = cols_samples, ordered_cl)
+cc[[2]] + theme(axis.text.x = element_text(angle = 30, vjust = 1, hjust=1, size = 7)) 
+ggsave(paste0(path, "img/granuloma/gran_15.png"))
+cc[[3]] 
+ggsave(paste0(path, "img/granuloma/gran_16.png"))
+```
+```{r}
+
+clusters_granuloma = function(d){
+
+df_data = d[[c("my_clusters", "orig.ident", "granuloma_class")]]
+colnames(df_data) = c("cluster", "vetrino", "granuloma_class")
+
+composition_df <- df_data %>%
+  group_by(cluster, vetrino, granuloma_class) %>%
+  summarise(num_spots = n(), .groups = 'drop')
+
+g1 = ggplot(data=composition_df, aes(x=vetrino, y=num_spots, fill= granuloma_class)) +
+  geom_bar(stat="identity", position="stack") +
+  facet_grid(~ cluster, switch = "x") +
+  ylab("# of spots") +
+  scale_fill_manual(values = gran_gen_col) +
+  theme(axis.ticks.x = element_blank())
+
+g2 = ggplot(data=composition_df, aes(x=vetrino, y=num_spots, fill= granuloma_class)) +
+  geom_bar(stat="identity", position="fill") +
+  #facet_grid(~ cluster, switch = "x") +
+  ylab("% of spots") +
+  scale_fill_manual(values = gran_gen_col)
+
+g3 = ggplot(data=composition_df, aes(x=vetrino, y=num_spots, fill= cluster)) +
+  geom_bar(stat="identity", position="stack") +
+  facet_grid(~ granuloma_class, switch = "x") +
+  ylab("# of spots") +
+  scale_fill_manual(values = cols_cl_gran) +
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_text(size = 6)) 
+
+g4 = ggplot(data=composition_df, aes(x=vetrino, y=num_spots, fill= cluster)) +
+  geom_bar(stat="identity", position="fill") +
+  facet_grid(~ granuloma_class, switch = "x") +
+  ylab("# of spots") +
+  scale_fill_manual(values = cols_cl_gran) +
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_text(size = 6)) 
+
+g5 = ggplot(data=composition_df, aes(x=granuloma_class, y=num_spots, fill= cluster)) +
+  geom_bar(stat="identity", position="fill") +
+  #facet_grid(~ granuloma_class, switch = "x") +
+  ylab("# of spots") +
+  scale_fill_manual(values = cols_cl_gran) +
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_text(size = 6)) 
+
+return (list(g1, g2, g3, g4, g5))
+}
+
+```
+
+```{r, fig.width= 18, fig.height=6}
+granuloma_data$my_clusters = factor(granuloma_data$seurat_clusters, levels = ordered_cl)
+cc = clusters_granuloma(granuloma_data)
+cc[[1]]
+ggsave(paste0(path, "img/granuloma/gran_17.png"), height = 6, width = 18)
+cc[[2]]
+ggsave(paste0(path, "img/granuloma/gran_18.png"), height = 4, width = 8)
+cc[[3]] + theme(axis.text.x = element_blank(), strip.text = element_text(size = 14))
+ggsave(paste0(path, "img/granuloma/gran_19.png"), height = 4, width = 10)
+cc[[4]] + theme(axis.text.x = element_text(angle = 90, size = 11), strip.text = element_text(size = 14))
+cc[[5]] + theme(axis.text.x = element_text(size = 14))
+```
+## DECONVOLUTION
+
+```{r, fig.height=5}
+
+#infected <- slices_merged[, slices_merged$orig.ident %in% c("C1", "D1", "C2", "D2", "B3", "C3", "D3")]
+
+matx0 <- t(as.matrix(granuloma_data@assays$RCTD$data))
+corr_inf <- cor(matx0)
+
+#p1 = pheatmap::pheatmap(corr, cluster_cols = TRUE, cluster_rows = TRUE, breaks = seq(-1,1,length.out=101),  color = colorRampPalette(c('blue','white','red'))(100), cellwidth = 15, cellheight = 15 )
+png(paste0(path, "img/deconv_corr_gran_1.png"), res = 85)
+Heatmap(corr_inf,
+  row_names_side = "right",    
+  column_names_side = "top",   
+  column_names_rot = 90,      
+  width = unit(6, "cm"),       
+  height = unit(6, "cm"),
+  column_dend_side = "bottom", 
+  name = "correlation", 
+  show_heatmap_legend = FALSE
+)
+dev.off()
+
+```
+
+```{r, fig.height=5}
+#library(ComplexHeatmap)
+#infected <- slices_merged[, slices_merged$orig.ident %in% c("C1", "D1", "C2", "D2", "B3", "C3", "D3")]
+DefaultAssay(granuloma_data)= "RNA"
+pp = list()
+for (i in 0:5){
+  sub_gran = granuloma_data[, granuloma_data$RNA_snn_res.0.3 == i]
+  matx0 <- t(as.matrix(sub_gran@assays$RCTD$data))
+corr_inf <- cor(matx0)
+
+#p1 = pheatmap::pheatmap(corr, cluster_cols = TRUE, cluster_rows = TRUE, breaks = seq(-1,1,length.out=101),  color = colorRampPalette(c('blue','white','red'))(100), cellwidth = 15, cellheight = 15 )
+#png(paste0(path, "img/deconv_corr_gran_cl", i, ".png"), res = 85)
+pp[[i+1]] = Heatmap(corr_inf,
+  row_names_side = "right",    
+  column_names_side = "top",   
+  column_names_rot = 90,      
+  width = unit(6, "cm"),       
+  height = unit(6, "cm"),
+  column_dend_side = "bottom", 
+  name = "correlation", 
+  show_heatmap_legend = FALSE
+)
+#dev.off()
+}
+
+
+```
+
+```{r}
+png(paste0(path, "img/deconv_corr_gran_cl", 0, ".png"), res = 85)
+pp[[1]]
+dev.off()
+
+png(paste0(path, "img/deconv_corr_gran_cl", 1, ".png"), res = 85)
+pp[[2]]
+dev.off()
+
+png(paste0(path, "img/deconv_corr_gran_cl", 2, ".png"), res = 85)
+pp[[3]]
+dev.off()
+
+png(paste0(path, "img/deconv_corr_gran_cl", 3, ".png"), res = 85)
+pp[[4]]
+dev.off()
+
+png(paste0(path, "img/deconv_corr_gran_cl", 4, ".png"), res = 85)
+pp[[5]]
+dev.off()
+
+png(paste0(path, "img/deconv_corr_gran_cl", 5, ".png"), res = 85)
+pp[[6]]
+dev.off()
+```
+
+```{r}
+cc = deconv_barplots(granuloma_data, cl= ordered_cl)
+cc[[1]]
+ggsave(paste0(path, "img/granuloma/deconv_cl_1.png"))
+cc[[3]]
+ggsave(paste0(path, "img/granuloma/deconv_cl_2.png"))
+
+```
+
+```{r, fig.height=6, fig.width=14}
+cc[[5]] + theme(axis.text.x = element_text(size = 12))
+ggsave(paste0(path, "img/granuloma/deconv_cl_3.png"), height = 6, width = 14)
+```
+
+```{r, fig.height=5, fig.width=8}
+cc[[2]]
+ggsave(paste0(path, "img/granuloma/deconv_cl_4.png"), height = 5, width = 8)
+cc[[4]]
+ggsave(paste0(path, "img/granuloma/deconv_cl_5.png"), height = 5, width = 8)
+cc[[6]]
+ggsave(paste0(path, "img/granuloma/deconv_cl_6.png"), height = 5, width = 10)
+
+```
+
+```{r}
+u
+saveRDS(granuloma_data, paste0(path, "data/granuloma_data.rds"))
+#granuloma_data = readRDS(paste0(path, "data/granuloma_data.rds"))
+```
+
+
+
+
+## DESEQ per granuloma size
+
+```{r}
+gsea_function = function(DEGS){
+  
+  original_gene_list <- DEGS$log2FoldChange
+  names(original_gene_list) <- rownames(DEGS)
+  gene_list<-na.omit(original_gene_list)
+  gene_list = sort(gene_list, decreasing = TRUE)
+  gsea <- gseGO(geneList=gene_list, 
+                ont ="BP", 
+                keyType = "SYMBOL", 
+                #nPerm = 10000, 
+                minGSSize = 3, 
+                maxGSSize = 800, 
+                pvalueCutoff = 0.05, 
+                verbose = TRUE, 
+                OrgDb = "org.Mm.eg.db", 
+                pAdjustMethod = "none", 
+                eps = 1e-50)
+  gsea = clusterProfiler::simplify(gsea)
+  
+  return(gsea)
+}
+
+
+```
+
+```{r}
+gran_list = lapply(toupper(letters[1:8]), function(x) granuloma_data[, granuloma_data$granuloma_class == x])
+names(gran_list) = toupper(letters[1:8])
+
+table(gran_list$A$orig.ident)
+gran_list$A = gran_list$A[, gran_list$A$orig.ident != "C2"]
+
+table(gran_list$B$orig.ident)
+table(gran_list$C$orig.ident)
+table(gran_list$D$orig.ident)
+gran_list$D = gran_list$D[, gran_list$D$orig.ident != "D2"]
+gran_list$E = gran_list$E[, gran_list$E$orig.ident != "D2"]
+
+table(gran_list$H$orig.ident)
+
+aa = lapply(gran_list, function(x){
+  expression_matrix = x@assays$Spatial$counts
+  tab = table(x$orig.ident)
+  metadata_gran = data.frame(spots = colnames(x))
+  metadata_gran$sample = x$orig.ident
+  metadata_gran$size = as.vector(tab[metadata_gran$sample])
+  table(metadata_gran$size, metadata_gran$sample)
+  
+  dds <- DESeqDataSetFromMatrix(countData = expression_matrix,
+                                colData = metadata_gran,
+                                design= ~ size)
+  
+  dds <- DESeq(dds)
+  
+  res <- results(dds)
+
+  
+})
+saveRDS(aa, paste0(path, "data/deseq_gran_size.rds"))
+
+
+
+bb = list()
+for (i in 1:length(aa)){
+  bb[[i]] = gsea_function(aa[[i]])
+}
+
+
+saveRDS(bb, paste0(path, "data/gsea_gran_size.rds"))
+```
+
+```{r}
+gsea_list = readRDS(paste0(path, "data/gsea_gran_size.rds"))
+gsea_list
+```
+
+```{r, fig.height=10, fig.width=10}
+for (i in 1:length(gsea_list)){
+  print(ridgeplot(gsea_list[[i]], label_format = 60))
+}
+
+```
+
+```{r, fig.height=10, fig.width=10}
+names = toupper(letters[1:8])
+
+dd = lapply(gsea_list, function(x){
+  #i = i+1
+  df = x@result
+  rownames(df) = df$Description
+  #df$cluster = names[i]
+  #print(dim(x)[1])
+  return (df)
+  
+})
+for (i in 1:length(names)){
+  dd[[i]]$granuloma = names[i]
+}
+common_pathways = Reduce(union, lapply(dd, rownames))
+length(common_pathways)
+
+df_tot = list()
+
+for (i in 1:length(names)){
+  df_tot[[i]] = data.frame(pathway = common_pathways, NES = dd[[i]][common_pathways, "NES"], log10padj = -log10(dd[[i]][common_pathways, "p.adjust"]), granuloma = dd[[i]]$granuloma[1])
+}
+df_tot = do.call(rbind, df_tot)
+
+df_tot %>%
+  filter(log10padj > 2) %>%
+  group_by(granuloma) %>%
+  arrange(desc(NES)) %>%  # Sort within each group by `value` descending
+  slice_head(n = 10) %>%    # Select the top `n` rows per group
+  ungroup() -> prova
+
+ggplot(prova, aes(x=granuloma, y = pathway, color = log10padj, size = NES)) + 
+  #theme(axis.text.y = element_text(size = 10), axis.text.x = element_text(size = 12)) +
+  geom_point() +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red")
+
+```
+
+```{r}
+granulomas <- c("B", "D", "E", "F", "H")
+
+pathways = unique(df_tot$pathway)
+length(pathways)
+zz = lapply(pathways, function(x){
+  mask = FALSE
+  ss = df_tot[df_tot$pathway == x, ]
+  ss = na.omit(ss)
+  if(sum(granulomas %in% ss$granuloma) > 2){
+    vv = granulomas[granulomas %in% ss$granuloma]
+    ss = ss[ss$granuloma %in% vv, ]
+    mask = all(ss$NES > 0) #|| all(ss$NES < 0)
+  }
+  return (mask)
+
+} )
+tenuti = pathways[unlist(zz)]
+length(tenuti)
+# Filtrare le righe in cui il pathway è presente (valore > 0) in almeno due granulomi
+tenuti 
+keep = c(1, 6, 7, 13, 16, 28, 34, 36, 37, 38, 44, 48, 49, 51, 54, 57)
+```
+
+```{r,  fig.height= 4, fig.width= 8}
+granulomas <- c("B", "E", "F", "H")
+
+ggplot(df_tot[df_tot$pathway %in% tenuti[keep] & df_tot$granuloma %in% granulomas, ], aes(x=granuloma, y = pathway, color = log10padj, size = NES)) + 
+  theme(axis.text.y = element_text(size = 10), axis.text.x = element_text(size = 12)) +
+  geom_point() +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red")
+
+ggsave(paste0(path, "img/granuloma/common.png"), height = 4, width = 8)
+```
+
+## trajectory
+conda env: /beegfs/scratch/ric.cosr/ric.cosr/stefano_gaia/conda/monocle2
+
+```{r, echo=FALSE, message=FALSE, warning = FALSE}
+library(monocle)  # serve scaricarlo in ambiente apposta
+library(Seurat)
+library(ggplot2)
+library(RColorBrewer)
+path = "/beegfs/scratch/ric.hsr/Gaia_saldarini/FINAL/"
+```
+
+```{r}
+gran_gen_col = c("ghostwhite", "chartreuse1","blue", "cyan", "firebrick","darkorchid","yellow", "deeppink1","darkorange","peachpuff")
+names(gran_gen_col) = c("0", "A", "B", "C", "D", "E", "F", "G", "H", "other")
+```
+
+```{r}
+clusters_names = c("Granuloma-like structures", "Infected area with epithelial markers", "Infected area with chemotaxis markers", "Infected area with lymphocytes markers", "Super inflammed area", "Infected area with airways markers")
+names(clusters_names) = c(0, 2, 1, 3, 4, 5)
+cols_cl_gran =  brewer.pal(6, name = "Set1")
+names(cols_cl_gran)= clusters_names[as.character(0:5)]
+
+```
+
+```{r}
+# 1: major_predicted.id
+# 2: seurat_clusters
+granuloma_data = readRDS(paste0(path, "data/granuloma_data.rds"))
+
+clusterss = clusters_names[as.character(unname(granuloma_data$RNA_snn_res.0.3))]
+names(clusterss) = colnames(granuloma_data)
+granuloma_data$seurat_clusters = factor(clusterss, levels = clusters_names)
+
+data = granuloma_data[, granuloma_data$granuloma_class != "other"] # granuloma_data$RNA_snn_res.0.4 %in% c(0, 4)&
+data$CellType = data$granuloma_class
+
+DimPlot(data, group.by = "CellType", label = FALSE, cols = gran_gen_col)
+ggsave(paste0(path, "img/granuloma/monocle_2_all.png"))
+table(granuloma_data$granuloma_class)
+```
+
+```{r, fig.height = 5, fig.width = 8}
+SpatialDimPlot(data, group.by = "CellType", ncol = 4, crop = FALSE, cols = gran_gen_col) & NoLegend() #+ plot_layout(guides = "collect")
+ggsave(paste0(path, "img/granuloma/monocle_1_all.png"), height = 5, width = 8)
+```
+
+```{r}
+var_genes <- VariableFeatures(data)    #integrated[["RNA"]]@var.features
+ordering_genes <- var_genes
+```
+
+```{r}
+#Extract data, phenotype data, and feature data from the SeuratObject
+dd <- as(as.matrix(data@assays$RNA@layers$scale.data), 'sparseMatrix')
+dim(dd)
+row.names(dd) = VariableFeatures(data)
+
+pd <- new('AnnotatedDataFrame', data = data@meta.data)
+
+fData <- data.frame(gene_short_name = row.names(dd), row.names = row.names(dd))
+fd <- new('AnnotatedDataFrame', data = fData)
+```
+
+```{r}
+#Construct monocle cds
+i_monocle2 <- newCellDataSet(dd,
+                             phenoData = pd,
+                             featureData = fd,
+                             #lowerDetectionLimit = 0.5,
+                             expressionFamily = uninormal())# since I have already normalized, thresholded and scaled data
+
+i_monocle2 <- setOrderingFilter(i_monocle2, ordering_genes)
+
+i_monocle2 <- reduceDimension(i_monocle2, max_components = 2,
+                              method = 'DDRTree', norm_method="none", pseudo_expr=0,scaling=TRUE)
+
+```
+
+```{r}
+i_monocle2 <- orderCells(i_monocle2)
+table(pData(i_monocle2)$State)
+```
+
+```{r}
+## black and white heatmap State vs CellType
+st_ce_table = pData(i_monocle2)[, c('State', 'CellType')]
+st_ce_table$CellType <- factor(st_ce_table$CellType)
+state_cluster_stat = table(st_ce_table)
+state_cluster_stat <- apply(state_cluster_stat, 2, function(x) x / sum(x))
+state_cluster_stat_ordered <- t(state_cluster_stat)
+
+
+PH <- pheatmap::pheatmap(state_cluster_stat_ordered, 
+                         cluster_cols = F, 
+                         cluster_rows = F, 
+                         color = colorRampPalette(RColorBrewer::brewer.pal(n=9, name='Greys'))(100),
+                         fontsize = 30, fontsize_row = 30, fontsize_col = 30,cellwidth=30,cellheight = 30 )
+
+
+#pdf("Trajectory_HeatMap_BW.pdf", 20,10)
+PH
+#dev.off()
+
+#i_monocle2 = readRDS("Bonanomi_trajectory.rds")
+```
+
+```{r, fig.height=5, fig.width=6}
+
+#color by celltype
+
+P1 = plot_cell_trajectory(i_monocle2, color_by = "CellType", cell_name_size = 8) +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme(legend.text = element_text(size=10)) +
+  theme(legend.title = element_text(size=10, face="bold")) + 
+  scale_color_manual(values=gran_gen_col)
+
+#Fig1 O
+#pdf("Trajectory_CellType.pdf")
+png(paste0(path, "img/granuloma/monocle_3_all.png"), height = 5, width = 6, units = "in", res = 300)
+P1
+dev.off()
+
+P1
+
+```
+
+```{r, fig.height=5, fig.width=6}
+#color by State
+table(i_monocle2$State)
+cols_states <- colorRampPalette(brewer.pal(max(as.numeric(i_monocle2$State)), "Paired"))(max(as.numeric(i_monocle2$State)))
+names(cols_states) = 1:max(as.numeric(i_monocle2$State))
+P3 = plot_cell_trajectory(i_monocle2, color_by = "State")+
+  guides(color = guide_legend(override.aes = list(size = 6))) +
+  theme(legend.text = element_text(size=20)) +
+  theme(legend.title = element_text(size=20,face="bold")) + scale_color_manual(values=cols_states)
+#Fig1 O
+png(paste0(path, "img/granuloma/monocle_4_all.png"), height = 5, width = 6, units = "in", res = 300)
+P3
+dev.off()
+
+P3
+
+```
+
+```{r, fig.width=14, fig.height = 6}
+#color and wrap by CellType     
+
+P4 = plot_cell_trajectory(i_monocle2, color_by = "CellType", ncol = 4) + facet_wrap(~CellType, nrow = 1)+
+      guides(color = guide_legend(override.aes = list(size = 6))) +
+      theme(legend.text = element_text(size=20)) +
+      theme(text = element_text(size=20)) +
+      theme(legend.title = element_text(size=20,face="bold")) + 
+      scale_color_manual(values=gran_gen_col)
+
+png(paste0(path, "img/granuloma/monocle_5_all.png"), height = 6, width = 14, units = "in", res = 300)
+P4
+dev.off()
+    
+P4
+```
+```{r}
+m = table(i_monocle2$State, i_monocle2$CellType)
+m
+c(m)
+tab = data.frame(val = c(m), cluster = rep(1:max(as.numeric(i_monocle2$State)), length(unique(i_monocle2$CellType))))
+tab = data.frame(State = i_monocle2$State, CellType = i_monocle2$CellType)
+                 
+```
+```{r}
+cols_states <- colorRampPalette(brewer.pal(9, "Paired"))(9)
+names(cols_states) = 1:9
+
+tabella = readRDS(paste0(path, "data/monocle_df.rds"))
+
+tab = tabella
+colnames(tab)[2] = "CellType"
+tab$CellType = factor(tab$CellType, levels = names(gran_gen_col))
+m = table(i_monocle2$State, i_monocle2$CellType)
+m
+c(m)
+tab = data.frame(val = c(m), cluster = rep(1:max(as.numeric(i_monocle2$State)), length(unique(i_monocle2$CellType))))
+tab = data.frame(State = i_monocle2$State, CellType = i_monocle2$CellType)
+```
+
+```{r}
+
+
+ggplot(tab, aes(x = State, fill = CellType)) +
+  geom_bar(position = "stack") +
+  labs(x = "TrajectoryState", y = "Number of spots", fill = "Granuloma") +
+  ggtitle("Distribution of Granulomas in trajectory states") +
+  scale_fill_manual(values = gran_gen_col)
+ggsave(paste0(path, "img/granuloma/monocle_11_all.png"))
+
+ggplot(tab, aes(x = State, fill = CellType)) +
+  geom_bar(position = "fill") +
+  labs(x = "TrajectoryState", y = "% of spots", fill = "Granuloma") +
+  ggtitle("Distribution of Granulomas in trajectory states") +
+  scale_fill_manual(values = gran_gen_col)
+ggsave(paste0(path, "img/granuloma/monocle_11_perc_all.png"))
+
+
+ggplot(tab, aes(x = State, fill = CellType)) +
+  geom_bar(position = "dodge") +
+  labs(x = "TrajectoryState", y = "Number of spots", fill = "Granuloma") +
+  ggtitle("Distribution of Granulomas in trajectory states") +
+  scale_fill_manual(values = gran_gen_col)
+
+
+ggplot(tab, aes(x = CellType, fill = State)) +
+  geom_bar(position = "stack") +
+  labs(x = "Granuloma", y = "Number of spots", fill = "TrajectoryState") +
+  ggtitle("Distribution of trajectory states in granulomas") +
+  scale_fill_manual(values = cols_states)
+ggsave(paste0(path, "img/granuloma/monocle_12_all.png"))
+
+ggplot(tab, aes(x = CellType, fill = State)) +
+  geom_bar(position = "fill") +
+  labs(x = "Granuloma", y = "% of spots", fill = "TrajectoryState") +
+  #ggtitle("Distribution of trajectory states in granulomas") +
+  scale_fill_manual(values = cols_states)+
+  theme(axis.text.x = element_text(size = 14))
+ggsave(paste0(path, "img/granuloma/monocle_12_perc_all.png"))
+
+ggplot(tab, aes(x = CellType, fill = State)) +
+  geom_bar(position = "dodge") +
+  labs(x = "Var2", y = "Count", fill = "Var1") +
+  ggtitle("Distribution of Var1 with respect to Var2") +
+  scale_fill_manual(values = cols_states)
+```
+
+```{r, fig.width = 6, fig.height = 5}
+
+table(granuloma_data$seurat_clusters)
+table(i_monocle2@phenoData@data$seurat_clusters)
+table(granuloma_data$my_clusters)
+# impose trajectory start in proliferating cells for pseudotime: airways   
+    
+    GM_state <- function(cds){
+      if (length(unique(cds@phenoData@data$State)) > 1){
+        T0_counts <- table(cds@phenoData@data$State, cds@phenoData@data$seurat_clusters)[, "Infected area with airways markers"]
+        return(as.numeric(names(T0_counts)[which
+                                           (T0_counts == max(T0_counts))]))
+      } else {
+        return (1)
+      }
+    }
+    
+    
+    i_monocle2 <- orderCells(i_monocle2, root_state = GM_state(i_monocle2))
+    
+# color by pseudotime
+    
+P6 = plot_cell_trajectory(i_monocle2, color_by = "Pseudotime") + 
+  guides(color = guide_legend(override.aes = list(size = 6))) +
+  scale_color_gradient(low = "blue", high = "red") +
+  theme(legend.text = element_text(size=20)) +
+  theme(text = element_text(size=20)) +
+  theme(legend.title = element_text(size=20,face="bold"))
+
+#Fig1 O
+png(paste0(path, "img/granuloma/monocle_6_all.png"), height = 5, width = 6, units = "in", res = 300)
+P6
+dev.off()
+
+P6
+```
+
+```{r}
+all(colnames(data) == sampleNames(i_monocle2@phenoData))
+tab = data.frame(State = i_monocle2$State, granuloma = i_monocle2$CellType, Pseudotime = i_monocle2$Pseudotime, clusters = i_monocle2$seurat_clusters)
+
+
+data$pseudotime = i_monocle2$Pseudotime
+table(i_monocle2$State)
+data$State = i_monocle2$State
+#DimPlot(data, group.by = "pseudotime", label = FALSE)
+umap_data = data.frame(data@reductions$umap@cell.embeddings)
+umap_data$pseudotime = data$pseudotime
+ggplot(umap_data, aes(x = umap_1, y = umap_2, color = pseudotime)) +
+  geom_point(size = 2) +
+  scale_color_gradient(low = "blue", high = "red") +
+  labs(color = "Expression") +
+  theme_minimal()
+ggsave(paste0(path, "img/granuloma/monocle_bar_1.png"))
+DimPlot(data, group.by = "State", label = FALSE, cols = cols_states)
+ggsave(paste0(path, "img/granuloma/monocle_bar_2.png"))
+```
+```{r}
+library(RColorBrewer)
+#cols_gran_3 =  brewer.pal(length(unique(granuloma_data$RNA_snn_res.0.4)), name = "Set1")
+#names(cols_gran_3)= as.character(0:(length(cols_gran_3)-1))
+```
+
+```{r}
+tab
+sorted_gran = unlist(lapply(names(gran_gen_col)[2:9], function(x){median(tab[tab$granuloma == x, "Pseudotime"])}))
+names(sorted_gran) = names(gran_gen_col)[2:9]
+tab$granuloma = factor(tab$granuloma, levels = names(sort(sorted_gran)))
+ggplot(tab, aes(x = granuloma, y = Pseudotime, fill = granuloma)) + geom_boxplot() + scale_fill_manual(values = gran_gen_col)
+
+unique(tab$clusters)
+sorted_gran = unlist(lapply(names(cols_cl_gran), function(x){median(tab[tab$clusters == x, "Pseudotime"])}))
+names(sorted_gran) = names(cols_cl_gran)
+tab$clusters = factor(tab$clusters, levels = names(sort(sorted_gran)))
+ggplot(tab, aes(x = clusters, y = Pseudotime, fill = clusters)) + geom_boxplot() + scale_fill_manual(values = cols_cl_gran)
+ggsave(paste0(path, "img/granuloma/monocle_8.png"))
+```
+
+```{r, fig.width = 6, fig.height = 5}
+#data$RNA_snn_res.0.4
+plot_cell_trajectory(i_monocle2, color_by = "seurat_clusters") + 
+  scale_color_manual(values = cols_cl_gran) +
+  guides(color = guide_legend(override.aes = list(size = 6))) +
+  theme(legend.text = element_text(size=20)) +
+  theme(text = element_text(size=20)) +
+  theme(legend.title = element_text(size=20,face="bold"))
+ggsave(paste0(path, "img/granuloma/monocle_7.png"), height = 5, width = 6)
+```
+
+
+```{r}
+tab
+saveRDS(tab, paste0(path, "data/monocle_df.rds"))
+
+tab = readRDS(paste0(path, "data/monocle_df.rds"))
+```
+
+```{r}
+uu
+```
+
+## 3D
+
+```{r}
+granuloma_data = readRDS(paste0(path, "data/granuloma_data.rds"))
+```
+
+```{r}
+axx <- list(
+  gridcolor='rgb(255, 255, 255)',
+  zerolinecolor='rgb(255, 255, 255)',
+  showbackground=TRUE,
+  backgroundcolor='rgb(230, 230,230)', 
+  ticktext = NULL,     # Remove x-axis labels
+  showticklabels = FALSE, 
+  title = ""
+)
+
+scale = 0.5
+```
+
+```{r}
+color_cluster_3d = function(coor, cl, col, alpha = .5){
+  #coor_2d = coor[coor$clusters %in% cl, ]
+  coor_2d = coor
+  coor_2d$clusters = as.character(coor_2d$clusters)
+  coor_2d$point_size = as.numeric(ifelse(coor_2d$clusters %in% cl, 12, 0.001))
+  #coor_2d$to_plot = ifelse(coor_2d$clusters %in% cl, coor_2d$clusters, "other")
+  coor_2d$to_plot = coor_2d$clusters#factor(coor_2d$to_plot, levels = names(col))
+  xx = plot_ly() %>%
+  layout(showlegend = FALSE,
+    scene = list(aspectmode='manual',
+                 aspectratio = list(x=5*scale, y=5*scale, z=scale*1.5), 
+                 camera = list(
+                   eye = list(x = 0, y = 2.5, z = 2.5), # Adjust the camera position for desired angle
+                   up = list(x=-1, y=0, z=0)
+                   ),
+                 xaxis = axx, yaxis = axx, zaxis = axx
+                 )
+    ) %>%
+ #layout(scene = list(xaxis=list(nticks = 4, range = c(0, 6000)),yaxis=list(nticks = 4, range = c(0, 6000)),zaxis=list(nticks = 4, range = c(0, 500)))) %>%
+ # add_trace(x = coor_3d$x, y = coor_3d$y, z = coor_3d$z, type = "scatter3d", mode = "markers", marker = list(color = "black", size = 1)) %>%
+  add_trace(x = coor_2d$x, y = coor_2d$y, z = coor_2d$z, color = coor_2d$to_plot, type = "scatter3d", 
+            #size = coor_2d$point_size, 
+            #sizes = coor_2d$point_size, 
+            mode = "markers", colors = c(col, "other" = "black"), opacity = alpha, marker = list( 
+      opacity = alpha, 
+      #color = coor_2d$to_plot,
+      #size = coor_2d$point_size,
+      sizes = coor_2d$point_size, #c("0" = 5, "other"= 0.5),
+      colorscale = c(col, "other" = "black"),
+      colorbar = list(title = NULL),
+      showscale = FALSE
+      ), 
+      showlegend = FALSE)
+  
+return (xx)
+}
+
+```
+
+```{r}
+gran_gen_col = c("ghostwhite", "chartreuse1","blue", "cyan", "firebrick","darkorchid","yellow", "deeppink1","darkorange","peachpuff")
+names(gran_gen_col) = c("0", "A", "B", "C", "D", "E", "F", "G", "H", "other")
+cols_gran_3 =  brewer.pal(6, name = "Set1")
+names(cols_gran_3)= as.character(0:5)
+
+cols_cl_gran =  brewer.pal(6, name = "Set1")#[c(1, 2, 4, 3, 6, 5)]
+names(cols_cl_gran) = 0:5
+
+col = c("red", "blue", "green", "purple", "orange", "yellow")
+names(col)= 0:(length(cols_gran_3)-1)
+```
+
+```{r}
+clusters_names = c("Granuloma-like structures", "Infected area with epithelial markers", "Infected area with chemotaxis markers", "Infected area with lymphocytes markers", "Super inflammed area", "Infected area with airways markers")
+names(clusters_names) = c(0, 2, 1, 3, 4, 5)
+cols_cl_gran =  brewer.pal(6, name = "Set1")
+names(cols_cl_gran)= clusters_names[as.character(0:5)]
+```
+
+```{r,  fig.height=6, fig.width=10}
+clusterss = clusters_names[as.character(unname(granuloma_data$RNA_snn_res.0.3))]
+names(clusterss) = colnames(granuloma_data)
+granuloma_data$seurat_clusters = factor(clusterss, levels = clusters_names)
+```
+
+```{r}
+coords_list <- lapply(granuloma_data@images, function(df) {
+  df@coordinates[, c("tissue_x", "tissue_y", "z")]
+})
+
+df_coords <- do.call(rbind, coords_list)
+colnames(df_coords) = c("x", "y", "z")
+df_coords$x = df_coords$x * 10
+df_coords$y = df_coords$y * 10
+rownames(df_coords) = substr(rownames(df_coords), 4, nchar(rownames(df_coords)))
+#df_coords$sample = filtered_spatialPCA_2$orig.ident
+#df_coords$gran = granuloma_data$granuloma_class
+all(rownames(df_coords) == colnames(granuloma_data))
+df_coords$clusters = granuloma_data$seurat_clusters#as.numeric(as.character(unname(granuloma_data$RNA_snn_res.0.3)))
+df_coords$granuloma_class = granuloma_data$granuloma_class#, levels = names(gran_gen_col))
+table(df_coords$clusters, df_coords$granuloma_class)
+#df_coords$clusters = df_coords$clusters +1
+```
+
+```{r}
+df_coords_list = lapply(toupper(letters[1:8]), function(x) df_coords[df_coords$granuloma_class == x, ])
+names(df_coords_list) = toupper(letters[1:8])
+```
+
+```{r}
+SpatialDimPlot(granuloma_data, group.by = "RNA_snn_res.0.3", cols = cols_cl_gran, ncol = 4) + plot_layout(guides = "collect")#& NoLegend()
+```
+
+```{r}
+table(granuloma_data$granuloma_class, granuloma_data$seurat_clusters)
+```
+```{r}
+color_cluster_3d(df_coords_list$A, names(cols_cl_gran), col = cols_cl_gran, alpha = 0.9)
+```
+
+```{r}
+table(df_coords_list$B$clusters)
+color_cluster_3d(coor = df_coords_list$B, cl = names(cols_cl_gran), col = cols_cl_gran, alpha = 0.9)
+```
+
+```{r}
+color_cluster_3d(df_coords_list$C, names(cols_cl_gran), col = cols_cl_gran, alpha = 0.9)
+```
+
+```{r}
+color_cluster_3d(df_coords_list$D, names(cols_cl_gran), col = cols_cl_gran, alpha = 0.9)
+```
+
+```{r}
+color_cluster_3d(df_coords_list$E, names(cols_cl_gran), col = cols_cl_gran, alpha = 0.9)
+```
+
+```{r}
+color_cluster_3d(df_coords_list$F, names(cols_cl_gran), col = cols_cl_gran, alpha = 0.9)
+```
+
+```{r}
+color_cluster_3d(df_coords_list$G, names(cols_cl_gran), col = cols_cl_gran, alpha = 0.9)
+```
+
+```{r}
+color_cluster_3d(df_coords_list$H, names(cols_cl_gran), col = cols_cl_gran, alpha = 0.9)
+```
+
+## MABS
+
+```{r}
+cols_geni_batterici = c("#D95F02","#1B9E77", "lavenderblush1")
+names(cols_geni_batterici) = c("lsr2+", "lsr2-", "no_mabs")
+
+cols_mabs = c("firebrick3", "grey80")
+names(cols_mabs) = c("MABS", "no_mabs")
+
+cols_rpoB_lsr2 = c("#D95F02","#1B9E77")
+names(cols_rpoB_lsr2) = c("lsr2", "rpoB")
+```
+
+```{r}
+#granuloma_data = readRDS(paste0(path, "data/granuloma_data.rds"))
+DimPlot(granuloma_data, reduction = "umap", group.by = "MABS_presence", cols = cols_mabs)
+DimPlot(granuloma_data, reduction = "umap", group.by = "MABS_tot", cols = cols_mabs)
+DimPlot(granuloma_data, reduction = "umap", group.by = "MABS_type", cols = cols_geni_batterici)
+```
+
+
+```{r}
+bacterial_genes_per_cluster = function(data, cl){
+
+df_mabs = data.frame()
+df_mabs_ratio = data.frame()
+for (i in 1: length(cl)){
+  xx = data[, data$my_clusters == cl[i]]
+  r = data.frame("number_spots" = sum(xx$rpoB_counts > 0), "perc_spots" = sum(xx$rpoB_counts > 0)/length(xx$rpoB_counts), "gene" = "rpoB", "sample" = cl[i], "counts" = xx$rpoB_counts)
+  l = data.frame("number_spots" = sum(xx$lsr2_counts > 0), "perc_spots" = sum(xx$lsr2_counts > 0)/length(xx$lsr2_counts), "gene" = "lsr2", "sample" = cl[i], "counts" = xx$lsr2_counts)
+	df_mabs = rbind(df_mabs, rbind(r, l))
+	
+	ratio_rpoB_lsr2 = data.frame("spots_ratio" = r$number_spots/l$number_spots, "perc_ratio" = r$perc_spots/l$perc_spots, "sample" = cl[i], "counts_ratio" = r$counts/l$counts)
+	df_mabs_ratio = rbind(df_mabs_ratio, ratio_rpoB_lsr2)
+}
+	
+    
+df_mabs$number_spots = as.numeric(df_mabs$number_spots)
+df_mabs$perc_spots = as.numeric(df_mabs$perc_spots)
+df_mabs$gene = factor(df_mabs$gene, levels = names(cols_rpoB_lsr2))
+df_mabs_ratio$spots_ratio = as.numeric(df_mabs_ratio$spots_ratio)
+df_mabs_ratio$perc_ratio = as.numeric(df_mabs_ratio$perc_ratio)
+df_mabs$sample = factor(df_mabs$sample, levels = cl)
+
+
+g1 = ggplot(data=df_mabs, aes(x = sample, y=number_spots, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("# of spots") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+
+g2 = ggplot(data=df_mabs, aes(x=sample, y=perc_spots, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("% of spots per slice") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+
+g3 = ggplot(data=df_mabs_ratio, aes(x=sample, y=spots_ratio)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("ratio") +
+  theme(panel.grid.minor = element_blank()) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  ggtitle("rpoB/lsr2 number of spots")
+
+g4 = ggplot(data=df_mabs, aes(x = sample, y=counts, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("# of counts") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+   scale_fill_manual(values=cols_rpoB_lsr2)
+
+return(list(g1, g2, g3, g4))
+}
+```
+
+```{r}
+granuloma_data$my_clusters = granuloma_data$seurat_clusters
+cc = bacterial_genes_per_cluster(granuloma_data, cl = lev)
+cc[[1]]
+ggsave(paste0(path, "img/granuloma/bacteria_1.png"))
+cc[[2]]
+ggsave(paste0(path, "img/granuloma/bacteria_2.png"))
+
+```

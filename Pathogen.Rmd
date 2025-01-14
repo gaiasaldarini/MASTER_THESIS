@@ -1,0 +1,902 @@
+---
+title: "FINAL_pathogen"
+author: "Gaia Saldarini"
+date: "2024-12-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## LIBRARY & COLORS
+
+```{r, echo=FALSE, message=FALSE, warning = FALSE}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(stringr)
+library(ggrepel)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggsignif)
+library(readr)
+library(spacexr)
+library(scatterpie)
+library(pheatmap)
+library(SpatialPCA)
+library(glmGamPoi)
+library(harmony)
+library(presto)
+library(igraph)
+library(plotly)
+library(ComplexHeatmap)
+library(circlize)
+library(tidyr)
+library(tibble)
+library(igraph)
+library(plotly)
+library(DESeq2)
+```
+
+```{r}
+path = "/beegfs/scratch/ric.hsr/Gaia_saldarini/FINAL/"
+```
+
+```{r}
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+cols_samples = rep("red2", 7)
+cols_samples = brewer.pal(7, "Reds")
+names(cols_samples) = samples_infected
+```
+
+```{r}
+cols_geni_batterici = c("#D95F02","#1B9E77", "lavenderblush1")
+names(cols_geni_batterici) = c("lsr2+", "lsr2-", "no_mabs")
+
+cols_mabs = c("firebrick3", "lavenderblush1")
+names(cols_mabs) = c("MABS", "no_mabs")
+
+cols_rpoB_lsr2 = c("#D95F02","#1B9E77")
+names(cols_rpoB_lsr2) = c("lsr2", "rpoB")
+```
+
+```{r}
+cols_celltypes <- c(
+        "Alveolar epithelial cells" = "#780116",
+        "Club cells" = "#f7b538",
+        "Fibroblast" = "red",
+        "Endothelial cells" = "yellow",
+        
+        "Monocytes" = "#a9d6e5",
+        "Macrophages" = "#0496ff",
+        "Dendritic cells" = "blue",
+        "Neutrophils" = "#7DF3FF",
+        
+        "B cells" = "black",
+        "T cells" = "grey",
+        
+        "NK cells" = "#6f2dbd",
+        "Erythrocytes" = "#f896d8")
+```
+
+```{r}
+gsea_function = function(DEGS){
+	
+	  original_gene_list <- DEGS$avg_log2FC    #log2FoldChange
+  names(original_gene_list) <- rownames(DEGS)
+  gene_list<-na.omit(original_gene_list)
+  gene_list = sort(gene_list, decreasing = TRUE)
+  gsea <- gseGO(geneList=gene_list, 
+             ont ="BP", 
+             keyType = "SYMBOL", 
+             #nPerm = 10000, 
+             minGSSize = 3, 
+             maxGSSize = 800, 
+             pvalueCutoff = 0.05, 
+             verbose = TRUE, 
+             OrgDb = "org.Mm.eg.db", 
+             pAdjustMethod = "none", 
+             eps = 1e-50)
+
+p1 = ridgeplot(gsea, label_format = 80) #+ ggtitle("GSEA - MABS lsr2+ vs MABS lsr2-")
+
+return(list(gsea, p1))
+}
+```
+## DISTRIBUTION 
+
+```{r}
+
+infected = readRDS(paste0(path, "data/infected_aligned.rds"))
+
+```
+
+```{r, fig.height=6, fig.width=10}
+SpatialDimPlot(infected, group.by = "MABS_presence", ncol = 4, cols = cols_mabs) +  plot_layout(guides = "collect")
+ggsave(paste0(path, "img/pathogen/MABS_1.png"), height = 6, width = 10)
+SpatialDimPlot(infected, group.by = "MABS_type", ncol = 2,  cols = cols_geni_batterici) +  plot_layout(guides = "collect")
+ggsave(paste0(path, "img/pathogen/MABS_2.png"), height=6, width=10)
+
+
+SpatialDimPlot(infected, group.by = "MABS_tot", ncol = 2, cols = cols_mabs) +  plot_layout(guides = "collect")
+```
+
+```{r}
+
+df_mabs = data.frame()
+df_mabs_ratio = data.frame()
+for (i in 1: length(samples_infected)){
+  xx = infected[, infected$orig.ident == samples_infected[i]]
+  r = data.frame("number_spots" = sum(xx$rpoB_counts > 0), "perc_spots" = sum(xx$rpoB_counts > 0)/length(xx$rpoB_counts), "gene" = "rpoB", "sample" = samples_infected[i], "counts" = xx$rpoB_counts)
+  l = data.frame("number_spots" = sum(xx$lsr2_counts > 0), "perc_spots" = sum(xx$lsr2_counts > 0)/length(xx$lsr2_counts), "gene" = "lsr2", "sample" = samples_infected[i], "counts" = xx$lsr2_counts)
+	df_mabs = rbind(df_mabs, rbind(r, l))
+	
+	ratio_rpoB_lsr2 = data.frame("spots_ratio" = r$number_spots/l$number_spots, "perc_ratio" = r$perc_spots/l$perc_spots, "sample" = samples_infected[i], "counts_ratio" = r$counts/l$counts)
+	df_mabs_ratio = rbind(df_mabs_ratio, ratio_rpoB_lsr2)
+}
+	
+    
+df_mabs$number_spots = as.numeric(df_mabs$number_spots)
+df_mabs$perc_spots = as.numeric(df_mabs$perc_spots)
+df_mabs$gene = factor(df_mabs$gene, levels = names(cols_rpoB_lsr2))
+df_mabs_ratio$spots_ratio = as.numeric(df_mabs_ratio$spots_ratio)
+df_mabs_ratio$perc_ratio = as.numeric(df_mabs_ratio$perc_ratio)
+df_mabs$sample = factor(df_mabs$sample, levels = samples_infected)
+```
+
+```{r}
+
+ggplot(data=df_mabs, aes(x = sample, y=number_spots, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("# of spots") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2)
+ggsave(paste0(path, "img/pathogen/MABS_3.png"))#, height=10, width=10)
+
+ggplot(data=df_mabs, aes(x=sample, y=perc_spots, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("% of spots per slice") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2)
+ggsave(paste0(path, "img/pathogen/MABS_4.png"))
+
+ggplot(data=df_mabs_ratio, aes(x=sample, y=spots_ratio)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("ratio") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("rpoB/lsr2 number of spots")
+ggsave(paste0(path, "img/pathogen/MABS_5.png"))
+
+ggplot(data=df_mabs, aes(x = sample, y=counts, fill = gene)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  xlab(NULL)+
+  ylab("# of counts") +
+  theme(panel.grid.minor = element_blank()) +
+  ggtitle("detection of bacterial transcripts")+
+   scale_fill_manual(values=cols_rpoB_lsr2)
+ggsave(paste0(path, "img/pathogen/MABS_6.png"))#, height=10, width=10)
+```
+
+
+
+
+## 3D
+
+```{r}
+coords_list <- lapply(infected@images, function(df) {
+  df@coordinates[, c("tissue_x", "tissue_y", "z")]
+})
+
+# Combina tutte le colonne usando cbind
+combined_coords <- do.call(rbind, coords_list)
+#combined_coords$sample = substr(rownames(combined_coords), 1, 2)
+rownames(combined_coords) = substr(rownames(combined_coords), 4, nchar(rownames(combined_coords)))
+df_coords = combined_coords
+colnames(df_coords) = c("x", "y", "z")
+```
+
+```{r}
+cols_cooccurrence = c("#D95F02","#1B9E77", "grey80")# "lavenderblush1")
+names(cols_cooccurrence) = c("lsr2+", "lsr2-", "no_mabs")
+```
+
+```{r}
+df_coords$MABS = infected$MABS_tot
+table(infected$MABS_type)
+df_coords$bacterial_genes = infected$MABS_type
+df_coords$bacterial_genes = factor(df_coords$bacterial_genes, levels = names(cols_cooccurrence))
+#df_coords = df_coords[df_coords$MABS == "mabs", ]
+df_coords$size_bact = ifelse(df_coords$bacterial_genes == "no_mabs", 0.5, 2)
+sizes_bact = c(2, 2, 2, 1)
+names(sizes_bact) = c("rpoB+lsr2+", "rpoB+lsr2-", "rpoB-lsr2+", "no_mabs")
+
+table(df_coords$size_bact)
+```
+
+```{r}
+cols_cooccurrence = c("#D95F02","#1B9E77", "darkblue", "grey90")# "lavenderblush1")
+names(cols_cooccurrence) = c("rpoB-lsr2+", "rpoB+lsr2-", "rpoB+lsr2+", "no_mabs")
+
+bact_genes <- rep("no_mabs", dim(infected)[2])
+bact_genes = ifelse(infected$rpoB_counts > 0 & infected$lsr2_counts>0, "rpoB+lsr2+", bact_genes)
+bact_genes = ifelse(infected$rpoB_counts >0 & infected$lsr2_counts==0, "rpoB+lsr2-", bact_genes)
+bact_genes = ifelse(infected$rpoB_counts ==0 & infected$lsr2_counts>0, "rpoB-lsr2+", bact_genes)
+
+
+df_coords$bact_genes = factor(bact_genes, names(cols_cooccurrence))
+```
+
+```{r}
+spatial_graph = plot_ly() %>%
+  layout(scene = list(aspectmode='manual',aspectratio = list(x=1.5, y=1.5, z=0.3))) %>%
+ #layout(scene = list(xaxis=list(nticks = 4, range = c(0, 6000)),yaxis=list(nticks = 4, range = c(0, 6000)),zaxis=list(nticks = 4, range = c(0, 500)))) %>%
+  add_trace(x = df_coords$x, y = df_coords$y, z = df_coords$z, color = df_coords$bacterial_genes, colors = cols_geni_batterici, type = "scatter3d", mode = "markers", size = ~df_coords$size_bact)
+
+spatial_graph
+
+htmlwidgets::saveWidget(as_widget(spatial_graph), paste0(path, "img/MABS_bact_genes_3D.html"))
+```
+
+```{r}
+spatial_graph = plot_ly() %>%
+  layout(scene = list(aspectmode='manual',aspectratio = list(x=1.5, y=1.5, z=0.3))) %>%
+ #layout(scene = list(xaxis=list(nticks = 4, range = c(0, 6000)),yaxis=list(nticks = 4, range = c(0, 6000)),zaxis=list(nticks = 4, range = c(0, 500)))) %>%
+  add_trace(x = df_coords$x, y = df_coords$y, z = df_coords$z, color = df_coords$bact_genes, colors = cols_cooccurrence, type = "scatter3d", mode = "markers", size = ~df_coords$size_bact)
+
+spatial_graph
+
+htmlwidgets::saveWidget(as_widget(spatial_graph), paste0(path, "img/MABS_bact_genes_3D_co.html"))
+```
+
+
+
+
+
+## DEGS MABS+ MABS-
+
+```{r}
+infected_aligned$rpoB_presence = slices_merged$rpoB_presence[colnames(infected_aligned)]
+infected_aligned$lsr2_presence = slices_merged$lsr2_presence[colnames(infected_aligned)]
+infected_aligned$MABS = slices_merged$MABS[colnames(infected_aligned)]
+infected_aligned$bacterial_genes = slices_merged$bacterial_genes[colnames(infected_aligned)]
+infected_aligned$beads = slices_merged$beads[colnames(infected_aligned)]
+```
+
+
+
+```{r}
+
+table(infected$MABS_presence)
+#infected_aligned[["RNA"]] = JoinLayers(infected_aligned[["RNA"]])
+infected = PrepSCTFindMarkers(infected)
+DEG_mabs = FindMarkers(infected, ident.1 = "MABS", ident.2 = "no_mabs", group.by = 'MABS_presence', assay = "SCT") # merged, non integrated
+#saveRDS(DEG_mabs, file = "/beegfs/scratch/ric.hsr/Gaia_saldarini/mouse_2/DEGS_mabs_4.rds")
+
+DEG_mabs %>%
+  filter(p_val_adj<0.1) %>%
+  top_n(n = 15, wt = avg_log2FC)-> DEG_up
+
+DEG_mabs %>%
+  filter(p_val_adj<0.1) %>%
+  top_n(n = 15, wt = -avg_log2FC)-> DEG_down
+
+Idents(infected) = infected$MABS_presence
+DotPlot(infected, features = c(rownames(DEG_up), rownames(DEG_down)), scale = TRUE, assay = "SCT") +
+  theme(axis.text.x = element_text(angle = 60, size = 9, hjust = 1))
+
+ggsave(paste0(path, "img/pathogen/DEG_1.png"))
+# poi violin plot dei pattern significativi  ??
+```
+
+```{r, fig.height= 10, fig.width=10}
+gsea_output = gsea_function(DEG_mabs)
+gsea_output[[2]]
+ridgeplot(gsea_output[[1]], label_format = 80, showCategory = 30)
+
+ggsave(paste0(path, "img/pathogen/DEG_2.png"), height = 12, width = 10)
+
+```
+
+## GRAPH
+
+
+```{r}
+
+make_graph_3d = function(nodes_pos, k_neigh, dist){   # per collegare tra di loro i punti con k neighbours e costruire il grafo
+  
+relationships = make_relations(dist, k_neigh)
+
+coor_relations = data.frame(x_from = nodes_pos[relationships[,1], "x"], y_from = nodes_pos[relationships[,1], "y"], z_from = nodes_pos[relationships[,1], "z"], x_to = nodes_pos[relationships[,2],"x"], y_to = nodes_pos[relationships[,2],"y"], z_to = nodes_pos[relationships[,2],"z"], n_neigh = relationships$neighbour)
+coor_relations$n_neigh = factor(coor_relations$n_neigh)
+
+actors <- data.frame(name = rownames(nodes_pos), nodes_pos, row.names = NULL)
+relations <- relationships
+rownames(relations) = NULL
+g <- graph_from_data_frame(relations, directed=FALSE, vertices=actors)
+E(g)$weight = as.numeric(E(g)$weight)
+
+return (list(g, coor_relations))
+}
+
+```
+
+```{r}
+make_relations = function(distance_matrix, k_neigh){
+  
+  relations = data.frame()
+
+  for (i in 1:dim(distance_matrix)[1]){
+    dist_i = distance_matrix[i,]
+    #dist_i = dist_i[dist_i != 0]
+    idx = order(dist_i)[2:(k_neigh+1)]  # il primo a distanza 0 è se stesso, non conta
+    idx = idx[dist_i[idx] < 600]  # threshold, oltre non prendo
+    
+   # edge_value = rep(0, dim(distance_matrix)[1])
+    #names(edge_value) = colnames(distance_matrix)
+    #edge_value[idx] = 1:length(idx) #k_neigh
+    
+    if (length(idx)>0){
+      from = rep(rownames(distance_matrix)[i], length(idx))
+    to = colnames(distance_matrix)[idx]
+    new_rel = cbind(from, to, 1:length(idx), dist_i[idx])
+    relations = rbind(relations, new_rel)
+    }
+    
+    }
+  
+  names(relations) = c("from", "to", "neighbour", "weight")
+  
+
+  return (relations)
+}
+```
+
+```{r}
+
+make_connections = function(g, nodes_pos, da, a, rctd){  # da sono i punti MABS, a è dove devo arrivare il più velocemente possibile, beads o granulomi
+
+  best_e = list()
+  best_v = list()
+  best_cost = list()
+
+  df_target = data.frame()
+
+  for (j in 1: length(da)) {
+    prova = shortest_paths(
+  g,
+  da[j], # numeric
+  to = a,  # numeric
+  mode = "all", # undirected
+  weights = E(g)$weight,  # va a ripescarli in variabile weight
+  output = "both",
+  predecessors = FALSE,
+  inbound.edges = FALSE,
+  algorithm = "dijkstra")
+
+  cost = list()
+  num_v = list()
+  for (k in 1:length(a)){
+    if (length(prova$vpath[[k]]) >0){
+     #idx = as_ids(prova$vpath[[j]])
+    cost[[k]] = sum(E(g)$weight[prova$epath[[k]]])
+    num_v[[k]] = length(prova$vpath[[k]]) 
+    } else {
+      cost[[k]] = 1000000   # se non riesce ad arrivare, è come se fosse distanza infinita
+    }
+    
+  }
+
+  idx_best = which.min(cost)
+  best_e[[j]] = prova$epath[[idx_best]]
+  best_v[[j]] = prova$vpath[[idx_best]]
+  best_cost[[j]] = cost[[idx_best]]
+  
+  vertex =  as_ids(best_v[[j]])
+  pesi = c(best_e[[j]]$weight, 0)
+for (k in (length(pesi)-1):1){
+  pesi[k] = pesi[k+1] + pesi[k]
+}
+  df_target = rbind(df_target, data.frame(vertex = vertex, cost = pesi, line = j))   # ho la linea j della traiettoria del "da" j
+
+  }
+  
+
+  #df_target = data.frame(vertex = as_ids(target), cost = unlist(best_cost))
+  #df_target <- df_target[order(df_target$cost),]
+
+  df_beads = data.frame(vertex = as_ids(a), cost = 0, line = NA)  # aggiungo le beads perché non hanno traiettoria ma sono già arrivate, che non ci sono in "da" per come l'ho definito
+  df_points = rbind(df_beads, df_target)
+
+
+x = rctd
+
+df_celltypes <- as.data.frame(x) %>%
+  rownames_to_column(var = "vertex") %>%  # Move row names (cell types) to a column
+  pivot_longer(cols = -vertex, 
+               names_to = "cell_type", 
+               values_to = "fraction")
+
+
+df_total = merge(df_celltypes, df_points, by = "vertex", all.x = TRUE)
+df_total = na.omit(df_total)  # ?
+df_total = df_total[df_total$cost != 1000000, ]   # tolgo quei punti che non sono arrivati all'obiettivo
+
+return (df_total)
+
+}
+```
+
+```{r}
+
+data = infected
+
+# dove costruire il grafo: sui mabs
+mabs = colnames(data)[data$MABS_presence == "MABS"]
+beads = read.csv(paste0(path, "data/beads.csv"))[[1]]
+mabs = unique(c(mabs, beads))  # nel grafo anche le beads spaziali, anche se non hanno mabs
+mabs = intersect(mabs, colnames(infected))
+data = data[, mabs]
+
+coords_list <- lapply(data@images, function(df) {
+  df@coordinates[, c("tissue_x", "tissue_y", "z")]
+})
+
+df_coords <- do.call(rbind, coords_list)
+colnames(df_coords) = c("x", "y", "z")
+df_coords$sample = data$orig.ident
+rownames(df_coords) = substr(rownames(df_coords), 4, nchar(rownames(df_coords)))
+
+
+df_coords$bact_counts = data$rpoB_counts + data$lsr2_counts
+df_coords$beads = data$beads
+df_coords$bact_genes = data$MABS_type
+df_coords$rpoB_lsr2 = df_coords$bact_genes
+df_coords$bact_genes[df_coords$beads == "Airways_containing_beads"] = "beads"
+df_coords$rpoB = data$rpoB_counts
+df_coords$lsr2 = data$lsr2_counts
+
+
+table(df_coords$bact_genes)
+dim(data)[2]
+ #GetTissueCoordinates(data)     # per essere in micron, o GetTissueCoordinates ruoto e x 10 (perchè da 0-600 a 0-6000) o pixel e applico 2 equazioni, con rownames e x y
+
+```
+
+```{r}
+min_c = 75  # min(df_coords$x)
+max_c = 515  # max(df_coords$x)  serve per grafo sulla slice
+coor_3d = df_coords
+coor_3d$x = df_coords$y
+coor_3d$y = max_c-df_coords$x+min_c
+coor_3d$x = coor_3d$x * 10
+coor_3d$y = coor_3d$y * 10 # in micron
+
+
+```
+
+```{r}
+#dist_3d = compute_distance_3d(as.matrix(coor_3d[, c("x", "y", "z")]))
+coor_3d$sample = factor(coor_3d$sample, levels = samples_infected)
+coor_3d <- coor_3d %>%
+  arrange(sample)
+aa = as.matrix(dist(coor_3d[, c("x", "y", "z")]))
+dim(aa)
+all(aa == t(aa))
+#prova = aa[rownames(aa)[startsWith(rownames(aa), "input")], colnames(aa)[startsWith(colnames(aa), "target")]]
+#dim(prova)
+#prova = aa[(dim(input_coor)[1]+1):dim(aa)[1], 1:dim(input_coor)[1]]
+
+#length((dim(input_coor)[1]+1):dim(aa)[1])
+
+#dim(prova)
+
+#bb = apply(prova, 1, min)
+```
+
+```{r}
+dim(aa)
+df_ann = data.frame(row.names = rownames(aa), sample = factor(substr(rownames(aa), nchar(rownames(aa))-1, nchar(rownames(aa))), levels = samples_infected))
+#sort(aa, decreasing = TRUE)[1:1000]
+pheatmap(aa, cluster_rows = FALSE, cluster_cols = FALSE, scale = "none", show_rownames = FALSE, show_colnames = FALSE, annotation_row = df_ann, annotation_col = df_ann, breaks = seq(0,4000,length.out=101), color = colorRampPalette(c('red','white','blue'))(100),cellwidth = 0.4, cellheight = 0.4, annotation_colors = list(sample = cols_samples))
+```
+
+```{r}
+dist_3d =aa
+return_graph_3d = make_graph_3d(nodes_pos = coor_3d, k_neigh = 6, dist = dist_3d)
+g_3d = return_graph_3d[[1]]
+relationships_3d = return_graph_3d[[2]]
+
+#saveRDS(g_3d, paste0(path, "data/graph_3d.rds"))
+```
+
+```{r}
+
+samples_z = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+names(samples_z) = as.character(c(0, 5, 35, 45, 65, 70, 80))
+
+relationships_3d$from_sample = samples_z[as.character(relationships_3d$z_from)]
+relationships_3d$to_sample = samples_z[as.character(relationships_3d$z_to)]
+relationships_3d$rel = paste0(relationships_3d$from_sample, "--", relationships_3d$to_sample)
+relationships_3d$rel = factor(relationships_3d$rel)
+
+connections_tra_slices = table(relationships_3d$rel)
+
+from = relationships_3d[, c("x_from", "y_from", "z_from")]
+to = relationships_3d[, c("x_to", "y_to", "z_to")]
+colnames(from) = c("x", "y", "z")
+colnames(to) = c("x", "y", "z")
+rel_bind = rbind(from, to)
+rel_bind$rel = rep(1:dim(relationships_3d)[1], 2)
+coor_3d$sample = factor(coor_3d$sample)
+
+reds = brewer.pal(7, "Reds")
+blues = brewer.pal(3, "Blues")
+col_samples = c(blues[1:2], reds[1:4], blues[3], reds[5:7])
+names(col_samples) = c("A1", "B1", "C1", "D1", "C2", "D2", "A3", "B3", "C3", "D3")
+
+```
+
+```{r}
+spatial_graph = plot_ly() %>%
+  layout(scene = list(aspectmode='manual',aspectratio = list(x=1.5, y=1.5, z=0.12))) %>%
+ #layout(scene = list(xaxis=list(nticks = 4, range = c(0, 6000)),yaxis=list(nticks = 4, range = c(0, 6000)),zaxis=list(nticks = 4, range = c(0, 500)))) %>%
+  add_trace(x = coor_3d$x, y = coor_3d$y, z = coor_3d$z, color = coor_3d$sample, type = "scatter3d", mode = "markers", size = 2, colors = col_samples) %>%
+  add_trace(x = rel_bind$x, y = rel_bind$y, z = rel_bind$z, split = rel_bind$rel, 
+            line = list(color = "black"),
+            type = "scatter3d", mode = "lines", showlegend = FALSE, inherit = FALSE)
+
+spatial_graph
+#htmlwidgets::saveWidget(as_widget(spatial_graph), paste0(path, "img/diff_pattern_3D.html"))
+```
+
+```{r}
+#saveRDS(coor_3d, paste0(path, "data/Nov_coor_3d.rds"))
+#saveRDS(rel_bind, paste0(path, "data/rel_bind.rds"))
+
+#coor_3d = readRDS(paste0(path, "data/prova_coor_3d.rds"))
+#rel_bind = readRDS(paste0(path, "data/rel_bind.rds"))
+```
+
+```{r}
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+relationships_3d$from_sample = factor(relationships_3d$from_sample, levels = samples_infected)
+relationships_3d$to_sample = factor(relationships_3d$to_sample, levels = samples_infected)
+pheatmap(table(relationships_3d$from_sample, relationships_3d$to_sample), cluster_rows = FALSE, cluster_cols = FALSE)
+
+table(relationships_3d$from_sample, relationships_3d$n_neigh)
+```
+
+```{r}
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+relationships_3d$from_sample = factor(relationships_3d$from_sample, levels = samples_infected)
+relationships_3d$to_sample = factor(relationships_3d$to_sample, levels = samples_infected)
+pheatmap(table(relationships_3d$from_sample, relationships_3d$to_sample), cluster_rows = FALSE, cluster_cols = FALSE)
+pheatmap(table(relationships_3d$from_sample, relationships_3d$to_sample), cluster_rows = FALSE, cluster_cols = FALSE, scale = "row")
+pheatmap(table(relationships_3d$from_sample, relationships_3d$to_sample), cluster_rows = FALSE, cluster_cols = FALSE, scale = "column")
+table(relationships_3d$from_sample, relationships_3d$n_neigh)
+```
+
+```{r}
+table(relationships_3d$rel) 
+rel_matrix = matrix(0, nrow = 7, ncol = 7)
+rownames(rel_matrix) = samples_infected
+colnames(rel_matrix) = samples_infected
+for (i in 1:7){
+  for (j in 1:7){
+    rel_matrix[i, j] = sum((relationships_3d$from_sample == samples_infected[i] & relationships_3d$to_sample == samples_infected[j]) | (relationships_3d$from_sample == samples_infected[j] & relationships_3d$to_sample == samples_infected[i]))
+  }
+}
+
+rel_matrix
+pheatmap(rel_matrix, cluster_rows = FALSE, cluster_cols = FALSE)
+```
+
+```{r, fig.width = 10}
+dff = as.data.frame(connections_tra_slices)
+colnames(dff) = c("rel", "freq")
+samples = 1:7
+names(samples) = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+xxx = abs(samples[substr(dff$rel, 1, 2)]- samples[substr(dff$rel, 5, 6)])
+names(xxx) = NULL
+dff$type = as.factor(xxx)
+
+table(dff$type)
+ggplot(data=dff, aes(x=rel, y=freq)) +
+  geom_bar(stat="identity") +
+  facet_wrap(~ type, nrow = 1, scales = "free_x") + #switch = "x")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  #facet_grid(~ type, switch = "x") 
+
+ggsave(paste0(path, "img/pathogen/graph_1.png"), width = 10)
+```
+
+```{r}
+graphh = return_graph_3d[[1]]
+#adj_matrix = as_adjacency_matrix(return_graph_2d[[1]])
+ii = cluster_louvain(graphh)
+#co = cluster_optimal(graphh)
+#plot(ii, graphh)
+plot(graphh, vertex.label = NA, vertex.size = 2)
+vv = V(graphh)
+#vv
+names(vertex_attr(graphh))
+```
+
+```{r}
+names(edge_attr(graphh))
+hist(edge_attr(graphh)[["weight"]])
+# ho bloccato a 600 micron con threshold
+```
+
+```{r}
+#graphh = g_filtered
+eigen=cluster_leading_eigen(g_3d)
+membership_colors = c(brewer.pal(10, "Set3"), brewer.pal(6, "Set1"))
+vertex_colors <- membership_colors[membership(eigen)]
+
+#membership_colors <- rainbow(length(unique(membership(eigen))))  # Generate distinct colors for each cluster
+#vertex_colors <- membership_colors[membership(eigen)]            # Map membership to colors
+```
+
+```{r}
+#plot(eigen, graphh )
+
+
+# Plot the graph with vertex colors based on clusters
+png(paste0(path, 'img/interaction/graph_clustered_3d.png'))#, width = 800, height = 600)
+
+plot(graphh, vertex.color = vertex_colors, main = "Clustered Graph", vertex.label = NA, vertex.size = 5)
+legend("topright", legend = paste("Cluster", 1:length(membership_colors)),
+       col = membership_colors, pch = 19, title = "Clusters", cex = 0.6)
+
+dev.off()
+```
+
+```{r}
+cols_geni_batterici = c("#D95F02","#1B9E77", "darkblue") #, "yellow")
+names(cols_geni_batterici) = c("lsr2+", "lsr2-", "beads")#, "co-occurrence", "beads")
+
+bact_genes_cols = cols_geni_batterici[V(graphh)$bact_genes]
+
+png(paste0(path, 'img/interaction/graph_clustered_3d_cols.png'))
+plot(graphh, vertex.color = bact_genes_cols, main = "Clustered Graph", vertex.label = NA, vertex.size = 5)
+dev.off()
+```
+```{r}
+cols = colorRampPalette(brewer.pal(11, "RdYlGn"))(19)
+
+dd = data.frame(vertex_attr(graphh)[c("name", "sample", "bact_counts", "bact_genes", "rpoB_lsr2")])
+dd$cluster = as.factor(membership(eigen)[dd$name])
+tab = table(dd$cluster, dd$rpoB_lsr2)
+tab = as.matrix(tab)
+lsr2_rpoB = tab[, 2]/tab[, 1]
+ordered = lsr2_rpoB[order(lsr2_rpoB, decreasing = TRUE)]
+
+names(cols) = names(ordered)
+all(dd$name == V(graphh)$name)
+dd$ratio_cols = cols[as.character(dd$cluster)]#cols[unname(membership(eigen)[V(graphh)])]
+ratio_cols = dd$ratio#cols[unname(membership(eigen)[V(graphh)])]
+names(ratio_cols) = V(graphh)$name
+
+#png(paste0(path, 'img/interaction/graph_clustered_cols_rpoBlsr2.png'))
+
+png(paste0(path, 'img/labmeeting/graph_clustered_cols_rpoBlsr2.png'))
+plot(graphh, vertex.color = ratio_cols,  vertex.label = NA, vertex.size = 6, main = "ratio lsr2/rpoB")
+legend("right", legend = c(NA, "high", rep(NA, 15), "low", NA),
+       col = cols, pch = 15, cex = 0.8, 
+        y.intersp = 0.5) 
+dev.off()
+```
+
+```{r}
+# ogni leiden cluster, rpoB/lsr2/entrambi
+# numero di conte di ogni gene
+dd = data.frame(vertex_attr(graphh)[c("name", "sample", "bact_counts", "bact_genes", "rpoB_lsr2")])
+dd$cluster = as.factor(membership(eigen)[dd$name])
+dd$bact_genes = as.factor(dd$bact_genes)
+dd$rpoB_lsr2 = as.factor(dd$rpoB_lsr2)
+table(dd$cluster, dd$rpoB_lsr2)
+table(dd$cluster, dd$bact_genes)
+ggplot(dd, aes(y = bact_counts, x = cluster)) + geom_boxplot(outlier.shape = NA) +
+  ylim(0, 7)
+  #stat="identity", color = NA)
+ggsave(paste0(path, 'img/pathogen/graph_2.png'))
+```
+```{r}
+saveRDS(graphh, paste0(path, "data/graph_3d.rds"))
+```
+
+## deseq
+
+```{r}
+g_3d = readRDS(paste0(path, "data/graph_3d.rds"))
+```
+
+```{r}
+library(igraph)
+isolated_vertices <- V(g_3d)[igraph::degree(g_3d) == 0]
+g_filtered = delete.vertices(g_3d, isolated_vertices)
+```
+
+
+###
+chi squared test
+
+```{r}
+to_remove = c(1, 10, 13, 14)
+beads_vertex = eigen[c(to_remove)]
+#eigen_filtered = eigen[-to_remove]
+g_filtered = delete.vertices(graphh, unlist(beads_vertex ))
+
+vertex_colors <- membership_colors[membership(eigen)[setdiff(names(V(graphh)), unname(unlist(beads_vertex)))]]
+plot(g_filtered, vertex.color = vertex_colors, main = "Clustered Graph", vertex.label = NA, vertex.size = 5)
+legend("topright", legend = paste("Cluster", 1:length(membership_colors)),
+       col = membership_colors, pch = 19, title = "Clusters", cex = 0.6)
+```
+
+```{r}
+dd = data.frame(vertex_attr(g_filtered)[c("name", "sample", "bact_counts", "bact_genes", "rpoB_lsr2")])
+dd$cluster = as.factor(membership(eigen)[dd$name])  # membership_colors[membership(eigen)[setdiff(names(V(graphh)), unname(unlist(beads_vertex)))]]
+dd$bact_genes = as.factor(dd$bact_genes)
+dd$rpoB_lsr2 = as.factor(dd$rpoB_lsr2)
+
+tab_clusters = table(dd$rpoB_lsr2, dd$cluster)[c("lsr2+", "lsr2-"), ]
+tab_0 = table(dd$rpoB_lsr2)[c("lsr2+", "lsr2-")]
+tab_clusters
+tab_0
+chi_square_test = list()
+
+for (i in 1:dim(tab_clusters)[2]){
+  #contingency_table = cbind(tab_0, tab_clusters[, i])
+  #colnames(contingency_table) = c("all_MABS", paste0("cl_", i))
+  chi_square_test[[i]] <- chisq.test(x = tab_clusters[ , i], p = tab_0, rescale.p = TRUE)
+}
+
+chisquare_list <- lapply(chi_square_test, function(df) {
+  df$p.value
+})
+pvalues <- do.call(c, chisquare_list)
+
+table(pvalues < 0.01)
+which(pvalues < 0.01)
+```
+
+```{r}
+ratio_cl = (tab_clusters["lsr2+", ]/tab_clusters["lsr2-", ])
+ratio = tab_0["lsr2+"]/tab_0["lsr2-"]
+ratio_cl/ratio
+log2(ratio_cl/ratio)
+```
+
+```{r}
+library(DESeq2)
+
+```
+
+```{r, fig.height = 6, fig.width = 10}
+#infected_aligned = readRDS(paste0(path, "data/infected_7_SCT.rds"))
+expression_matrix = infected@assays$SCT$counts[, V(g_3d)$name]
+tab = log2(ratio_cl/ratio)
+metadata_gran = data.frame(spots = colnames(expression_matrix))
+#metadata_gran$sample = x$orig.ident
+metadata_gran$cluster = as.factor(membership(eigen)[metadata_gran$spots])
+metadata_gran$size = as.vector(tab[as.character(metadata_gran$cluster)])
+dim(na.omit(metadata_gran))[1] == dim(metadata_gran)[1]
+metadata_gran = na.omit(metadata_gran)
+expression_matrix = expression_matrix[, metadata_gran$spots]
+dim(metadata_gran)
+dim(expression_matrix)
+#table(metadata_gran$size, metadata_gran$sample)
+
+dds <- DESeqDataSetFromMatrix(countData = expression_matrix,
+                              colData = metadata_gran,
+                              design= ~ size)
+
+dds <- DESeq(dds)
+
+res <- results(dds)
+gsea_plot = gsea_function(res)
+gsea_plot[[2]]
+
+ridgeplot(gsea_plot[[1]], label_format = 50, showCategory = 15) + theme(axis.text.y = element_text(size = 14))
+ggsave(paste0(path, "img/pathogen/graph_3.png"), width = 10, height = 7)
+```
+
+
+
+## trajectory
+
+```{r}
+library(dplyr)
+library(dplyr)
+library(tidyr)
+label_counts <- dd %>%
+  group_by(cluster, bact_genes) %>%
+  summarize(count = n(), .groups = 'drop') %>%
+  complete(cluster, bact_genes, fill = list(count = 0))  
+
+# Plot the results
+library(ggplot2)
+ggplot(label_counts, aes(x = as.factor(cluster), y = count, fill = as.factor(bact_genes))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  #labs(x = "Cluster", y = "Number of Vertices", fill = "Label") +
+  ggtitle("Type of MABS genes in Each Cluster") +
+  scale_fill_manual(values = cols_geni_batterici)
+  #theme_minimal()
+
+ggsave(paste0(path, 'img/pathogen/graph_4.png'))
+```
+
+```{r}
+library(igraph)
+g_3d = readRDS(paste0(path, "data/graph_3d.rds"))
+isolated_vertices <- V(g_3d)[igraph::degree(g_3d) == 0]
+g_3d = delete.vertices(g_3d, isolated_vertices)
+
+da_3d = V(g_3d)[V(g_3d)$beads == "Tissue"]
+a_3d = V(g_3d)[V(g_3d)$beads == "Airways_containing_beads"]
+
+rctd = t(data@assays$RCTD$data[, V(g_3d)])
+df_3d = make_connections(g = g_3d, nodes_pos = coor_3d, da = da_3d, a = a_3d, rctd = rctd)
+
+
+#df_3d$rpoB = data@assays$Spatial$counts["rpoB", df_3d$vertex]
+#df_3d$lsr2 = data@assays$Spatial$counts["MAB-0545", df_3d$vertex]
+#df_3d$bact_counts = data@assays$Spatial$counts["rpoB",df_3d$vertex] + data@assays$Spatial$counts["MAB-0545",df_3d$vertex]
+
+  traiettorie = unique(df_3d$line)
+  for (j in 1: length(traiettorie)){
+    relative_dist = df_3d[df_3d$line == traiettorie[j], ]
+    relative_cost = relative_dist$cost / max(relative_dist$cost)
+    df_3d[df_3d$line == traiettorie[j], "relative_cost"] = relative_cost
+    
+  }
+
+```
+
+
+```{r, fig.height= 4, fig.width = 9}
+celltypes_filtered = c("Alveolar epithelial cells", "B cells", "Dendritic cells", "Macrophages", "Monocytes", "Neutrophils", "T cells")
+df_filtered = df_3d[df_3d$cell_type %in% celltypes_filtered, ]
+length(celltypes_filtered) == length(unique(df_filtered$cell_type))
+ggplot(df_filtered, aes(x= cost, y=fraction, color = cell_type)) + 
+  geom_smooth() + 
+  #ylim(0, 0.3) +
+  scale_color_manual(values = cols_celltypes)+
+  #xlim(0, 800)+
+  ggtitle("Cell types distribution along 3d path from beads to MABS spots") +
+  theme(
+    plot.title = element_text(size = 10)  # Adjust title size here
+  )
+
+ggsave(paste0(path, "img/pathogen/graph_5.png"), height = 3, width = 15)
+
+#ggplot(df_3d, aes(x= cost)) + 
+  geom_point(aes(y = rpoB), color = "#1B9E77") +
+  geom_point(aes(y = lsr2), color = "#D95F02")
+  #geom_smooth() 
+  #xlim(0, 800)+
+  #ggtitle(paste0("Distance from beads: bacterial genes counts - k_neigh: ", 2*i+2))
+
+
+## RELATIVE DISTANCES
+
+ggplot(df_3d, aes(x= relative_cost, y=fraction, color = cell_type)) + 
+  geom_smooth() + 
+  scale_color_manual(values = cols_celltypes)+
+  ylim(0, 0.3) +
+  #xlim(0, 800)+
+  ggtitle("3D distance from beads - 4 consecutive slices; 0; 5; 35; 45; 65; 70; 80 - k_neigh: 6")
+
+#ggplot(df_3d, aes(x= relative_cost)) + 
+  geom_point(aes(y = rpoB), color = "#1B9E77") +
+  geom_point(aes(y = lsr2), color = "#D95F02")
+```

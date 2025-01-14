@@ -1,0 +1,496 @@
+---
+title: "FINAL_deconvolution"
+author: "Gaia Saldarini"
+date: "2024-12-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## LIBRARY & COLORS
+
+```{r, message=FALSE, warning = FALSE}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(stringr)
+library(ggrepel)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggsignif)
+library(readr)
+library(spacexr)
+library(scatterpie)
+library(pheatmap)
+library(SpatialPCA)
+library(glmGamPoi)
+library(harmony)
+#install.packages('devtools')
+#devtools::install_github('immunogenomics/presto')
+library(presto)
+library(igraph)
+library(plotly)
+library(ComplexHeatmap)
+library(circlize)
+library(tidyr)
+library(tibble)
+```
+
+```{r}
+path = "/beegfs/scratch/ric.hsr/Gaia_saldarini/FINAL/"
+```
+
+```{r}
+samples_tot = c("A1", "B1", "A3", "C1", "D1", "C2", "D2", "B3", "C3", "D3")
+
+reds = brewer.pal(7, "Reds")
+blues = brewer.pal(3, "Blues")
+cols_samples_tot = c(blues, reds)
+names(cols_samples_tot) = samples_tot
+```
+
+```{r}
+conditions = c("Infected", "Ctrl")
+
+cols_cond = c("red3", "green3")
+names(cols_cond) = conditions
+```
+
+```{r}
+cols_celltypes <- c(
+        "Alveolar epithelial cells" = "#780116",
+        "Club cells" = "#f7b538",
+        "Fibroblast" = "red",
+        "Endothelial cells" = "yellow",
+        
+        "Monocytes" = "#a9d6e5",
+        "Macrophages" = "#0496ff",
+        "Dendritic cells" = "blue",
+        "Neutrophils" = "#7DF3FF",
+        
+        "B cells" = "black",
+        "T cells" = "grey",
+        
+        "NK cells" = "#6f2dbd",
+        "Erythrocytes" = "#f896d8")
+```
+
+```{r}
+list_macro = list(stromal = c("Alveolar epithelial cells", "Club cells", "Fibroblast", "Endothelial cells", "Erythrocytes"), myeloid = c("Monocytes", "Macrophages", "Dendritic cells", "Neutrophils"), lymphoid = c("B cells", "T cells", "NK cells"))
+
+cols_macro = c( "tan1", "dodgerblue", "snow4")
+names(cols_macro) = c("stromal", "myeloid", "lymphoid")
+
+```
+
+## DECONVOLUTION GENERAL
+### SPATIAL 
+
+```{r, fig.height = 10, fig.width=8, message = FALSE}
+
+slices_list = readRDS(paste0(path, "data/slices_list.rds"))
+slices_merged = readRDS(paste0(path, "data/slices_merged.rds"))
+
+cell_types = rownames(slices_list[[1]][["RCTD"]]$data)
+for (i in 1:10){
+  print(samples_tot[i])
+  print(SpatialFeaturePlot(slices_list[[i]], features = cell_types, ncol = 4, min.cutoff = 0, max.cutoff = 0.5)) #ggtitle(as.list(names(cols_celltypes))) & theme(legend.position = "none"))
+  ggsave(paste0(path, "img/deconvolution/hostinfected_", samples_tot[i], "_features.png"), width = 8, height = 10)
+}
+
+```
+
+```{r, fig.height=6, fig.width=12, message = FALSE}
+
+for (i in 1:length(cell_types)){
+  print(SpatialFeaturePlot(slices_merged, features = cell_types[i], ncol = 5, min.cutoff = 0, max.cutoff = 0.5)+ plot_layout(guides = "collect") & guides(fill = guide_colorbar(direction = "vertical"))) #& NoLegend()
+ggsave(paste0(path, "img/deconvolution/host_infected_", cell_types[i], "_spatial.png"), width = 12, height = 6)
+}
+
+```
+
+```{r, message = FALSE}
+pie_size <- 0.4
+
+for(i in 1:length(slices_list)){
+  #pdf(paste0("/beegfs/scratch/ric.hsr/Gaia_saldarini/prova/ScatterPie_deconvolution_analysis_",names(slices)[i],".pdf"))
+  # coordinates info
+  df_for_scatter_pie <- slices_list[[i]]@images[[1]]@coordinates[,c('imagerow','imagecol')]
+  df_for_scatter_pie$dotID <- seq(1, nrow(df_for_scatter_pie), by = 1)
+  
+  # celltype info
+  df_celltype_proportion <- as.data.frame(t(slices_list[[i]][['RCTD']]$data))
+  
+  # df for scatter pie
+  df_for_scatter_pie_final <- cbind(df_for_scatter_pie, df_celltype_proportion)
+  
+      
+      
+  p <- ggplot() + geom_scatterpie(aes(x=imagecol, y=12000-imagerow, group=dotID), data=df_for_scatter_pie_final,
+                           color=NA,
+                           pie_scale = pie_size, 
+                           cols=names(cols_celltypes)
+                           )+ coord_equal()+
+  scale_fill_manual(values = cols_celltypes)
+                     
+  print(p)
+  ggsave(paste0(path, "img/deconvolution/hostinfected_", samples_tot[i], "_pie.png"))#, width = 8, height = 4)
+  #dev.off()
+}
+```
+
+### CORRELATION
+
+```{r, fig.height=5, warning = FALSE, message=FALSE}
+controlli <- slices_merged[, slices_merged$orig.ident %in% c("A1", "B1", "A3")]
+
+matx0 <- t(as.matrix(controlli@assays$RCTD$data))
+corr_ctrl <- cor(matx0)
+corr_ctrl[!upper.tri(corr_ctrl)] = 0
+diag(corr_ctrl) = 1
+
+png(paste0(path, "img/deconvolution/deconv_corr_ctrl_1.png"), res = 85)
+heat_ctrl = Heatmap(corr_ctrl,
+  row_names_side = "right",    
+  column_names_side = "top",   
+  column_names_rot = 90,      
+  width = unit(6, "cm"),       
+  height = unit(6, "cm"),
+  column_dend_side = "bottom", 
+  name = "correlation", cluster_rows = FALSE, cluster_columns = FALSE,
+  col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),  
+  column_title = "Ctrl",
+    
+  show_heatmap_legend = FALSE
+)
+dev.off()
+
+heat_ctrl
+#p1 = pheatmap::pheatmap(corr, cluster_cols = TRUE, cluster_rows = TRUE, breaks = seq(-1,1,length.out=101),  color = colorRampPalette(c('blue','white','red'))(100), cellwidth = 15, cellheight = 15 )
+```
+
+```{r, fig.height=5, warning = FALSE, message=FALSE}
+infected <- slices_merged[, slices_merged$orig.ident %in% c("C1", "D1", "C2", "D2", "B3", "C3", "D3")]
+
+matx0 <- t(as.matrix(infected@assays$RCTD$data))
+corr_inf <- cor(matx0)
+corr_inf[!upper.tri(corr_inf)] = 0
+diag(corr_inf) = 1
+
+png(paste0(path, "img/deconvolution/deconv_corr_inf_1.png"), res = 85)
+heat_inf = Heatmap(corr_inf,
+  row_names_side = "right",    
+  column_names_side = "top",   
+  column_names_rot = 90,      
+  width = unit(6, "cm"),       
+  height = unit(6, "cm"),
+  column_dend_side = "bottom", 
+  name = "correlation", 
+  show_heatmap_legend = TRUE,  cluster_rows = FALSE, cluster_columns = FALSE,
+  col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),
+  column_title = "Infected"
+)
+
+dev.off()
+
+```
+
+```{r}
+corr_i_c = corr_inf - corr_ctrl
+
+png(paste0(path, "img/deconvolution/deconv_corr_diff.png"), res = 85)
+heat_diff = Heatmap(corr_i_c,
+  row_names_side = "right",    
+  column_names_side = "top",   
+  column_names_rot = 90,      
+  width = unit(6, "cm"),       
+  height = unit(6, "cm"),
+  column_dend_side = "bottom", 
+  name = "correlation", 
+  show_heatmap_legend = FALSE, cluster_rows = FALSE, cluster_columns = FALSE,
+  col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),
+  column_title = "Infected - Ctrl"
+)
+
+dev.off()
+```
+
+```{r, fig.width = 10, warning = FALSE, message=FALSE}
+#png(paste0(path, "img/labmeeting/hostinfected_correlation3.png"), res = 100)
+
+heat_ctrl + heat_inf + heat_diff
+
+heat_inf + heat_ctrl + heat_diff
+
+heat_ctrl + heat_diff
+
+heat_inf + heat_diff
+
+# dev.off()
+```
+
+### MACRO CELL TYPES
+
+```{r}
+mm = slices_merged@assays$RCTD$data
+dim(mm)
+
+mm_macro = matrix(0, ncol = dim(mm)[2], nrow = 3)
+mm_macro[1,] = apply(mm[list_macro$stromal, ], 2, median)
+mm_macro[2,] = apply(mm[list_macro$myeloid, ], 2, median)
+mm_macro[3,] = apply(mm[list_macro$lymphoid, ], 2, median)
+colnames(mm_macro) = colnames(mm)
+rownames(mm_macro) = names(list_macro)
+dim(mm_macro)
+
+```
+
+```{r}
+#slices_list = readRDS(paste0(path, "data/slices_list_10_filtered.rds"))
+pie_size <- 0.4
+
+for(i in 1:length(slices_list)){
+  #pdf(paste0("/beegfs/scratch/ric.hsr/Gaia_saldarini/prova/ScatterPie_deconvolution_analysis_",names(slices)[i],".pdf"))
+  # celltype info
+  df_celltype_proportion <- as.data.frame(t(mm_macro[, endsWith(colnames(mm_macro), samples_tot[i])]))
+  
+  # coordinates info
+  df_for_scatter_pie <- slices_list[[i]]@images[[1]]@coordinates[,c('imagerow','imagecol')]
+  df_for_scatter_pie$dotID <- seq(1, nrow(df_for_scatter_pie), by = 1)
+  df_for_scatter_pie = df_for_scatter_pie[rownames(df_celltype_proportion), ]
+
+  
+  # df for scatter pie
+  df_for_scatter_pie_final <- cbind(df_for_scatter_pie, df_celltype_proportion)
+  
+      
+      
+  p <- ggplot() + geom_scatterpie(aes(x=imagecol, y=12000-imagerow, group=dotID), data=df_for_scatter_pie_final,
+                           color=NA,
+                           pie_scale = pie_size, 
+                           cols=names(cols_macro)
+                           )+ coord_equal()+
+  scale_fill_manual(values = cols_macro)
+                     
+  print(p)
+  ggsave(paste0(path, "img/deconvolution/hostinfected_", samples_tot[i], "_pie_macro.png"))#, width = 8, height = 4)
+  #dev.off()
+}
+```
+
+```{r, fig.width=9, fig.height=4}
+
+cell_types = rownames(slices_merged[["RCTD"]]$data)
+
+data = slices_merged
+samples = unique(data$orig.ident)
+x = t(data@assays$RCTD$data)
+
+df <- as.data.frame(x) %>%
+  rownames_to_column(var = "vertex") %>%  # Move row names (cell types) to a column
+  pivot_longer(cols = -vertex, 
+               names_to = "cell_type", 
+               values_to = "fraction")
+df$sample = data$orig.ident[df$vertex]
+df$condition = data$condition[df$vertex]
+  
+df$condition = factor(df$condition, levels = names(cols_cond)) 
+df$fraction = round(df$fraction, 3)
+df$cell_type = factor(df$cell_type, levels = names(cols_celltypes))
+
+# ordino cell types per difference in infection
+  
+  sorted_gran = unlist(lapply(cell_types, function(x){
+    median(df$fraction[df$cell_type == x & df$condition == "Infected"]) - median(df$fraction[df$cell_type == x & df$condition == "Ctrl"])}))
+  
+names(sorted_gran) = cell_types
+df$cell_type = factor(df$cell_type, levels = names(sort(sorted_gran)))
+
+ggplot(df, aes(x = cell_type, y = fraction, fill = condition)) +
+  geom_boxplot(outliers = FALSE) + theme(axis.text.x = element_text(angle = 30, vjust = 1, hjust=1)) +
+  scale_fill_manual(values=cols_cond) +
+  ggtitle("Infection distribution by cell types")
+
+ggsave(paste0(path, "img/deconvolution/hostinfected_barplot_abundance.png"), width = 9, height = 4)
+
+```
+
+## BALT
+
+```{r}
+infected_aligned = readRDS(paste0(path, "data/infected_aligned.rds"))
+```
+
+```{r, fig.height=6, fig.width = 12}
+SpatialFeaturePlot(infected_aligned, features = "B cells", ncol = 4) + plot_layout(guides = "collect") & guides(fill = guide_colorbar(direction = "vertical"))
+ggsave(paste0(path, "img/deconvolution/ccr6_1.png"), height = 6, width = 12)
+```
+
+```{r, fig.height=6, fig.width = 12}
+SpatialFeaturePlot(infected_aligned, features = "T cells", ncol = 4) + plot_layout(guides = "collect") & guides(fill = guide_colorbar(direction = "vertical"))
+ggsave(paste0(path, "img/deconvolution/ccr6_2.png"), height = 6, width = 12)
+```
+
+```{r, fig.height=5, fig.width = 12}
+# The gene is preferentially expressed by immature dendritic cells and memory T cells. This receptor has been shown to be important for B-lineage maturation and antigen-driven B-cell differentiation,
+# questo gene espresso in Tcells non rispecchia il pattern di localizzazione delle T cells ma si concentra nelle zone di interazione con le B (BALT structures?)
+SpatialFeaturePlot(infected_aligned, features = "Ccr6", ncol = 4) + plot_layout(guides = "collect") & guides(fill = guide_colorbar(direction = "vertical"))
+ggsave(paste0(path, "img/deconvolution/ccr6_3.png"), height = 6, width = 12)
+```
+```{r, fig.height=4, fig.width=4}
+hist(infected_aligned$`T cells`, main = "T cells distribution", xlab = "fraction")
+abline(v = 0.1, col = "red", lwd = 3)
+text(x = 0.06, y = 9000, labels = "0.1", col = "red", pos = 3)
+
+
+hist(infected_aligned$`B cells`)
+```
+
+```{r, fig.width=4, fig.height=4}
+df = data.frame(T_B_cells = infected_aligned$`T cells` * infected_aligned$`B cells`, Ccr6 = infected_aligned@assays$SCT$data["Ccr6", ])
+dim(df)
+df = df[infected_aligned$`T cells` > 0.1, ]
+dim(df)
+
+png(paste0(path, "img/deconvolution/ccr6_5.png"))
+hist(df$T_B_cells, main = "T_cells * B_cells distribution", xlab = " ")
+abline(v = 0.02, col = "red", lwd = 3)
+text(x = 0.04, y = 8000, labels = "0.02", col = "red", pos = 3)
+dev.off()
+
+
+df$prod = ifelse(df$T_B_cells < 0.02, "No co-localization", "Co-localization")
+table(df$prod)
+ggplot(df, aes(x = prod, y = Ccr6)) + geom_boxplot() +
+  geom_signif(comparisons = list(c("Co-localization", "No co-localization")), 
+              map_signif_level = FALSE) +
+  xlab(" ")+
+  ylab("Ccr6 counts") +
+  theme(axis.text.x = element_text(size = 14, angle = 20, vjust = 1, hjust = 1))
+
+ggsave(paste0(path, "img/deconvolution/ccr6_4.png"))
+u
+```
+
+
+## M1 E M2 SIGNATURES
+
+```{r}
+axx <- list(
+  gridcolor='rgb(255, 255, 255)',
+  zerolinecolor='rgb(255, 255, 255)',
+  showbackground=TRUE,
+  backgroundcolor='rgb(230, 230,230)', 
+  ticktext = NULL,     # Remove x-axis labels
+  showticklabels = FALSE, 
+  title = ""
+)
+
+scale = 0.5
+```
+```{r}
+color_continuous = function(coor, var, min_cutoff=NA, max_cutoff=NA){
+  coor_2d = coor
+  coor_2d$to_plot = coor_2d[[var]]
+  if (!is.na(min_cutoff)){
+    coor_2d$to_plot = ifelse(coor_2d[[var]] < min_cutoff, "texture", coor_2d$to_plot)
+  }
+  if (! is.na(max_cutoff)){
+     coor_2d$to_plot = ifelse(coor_2d[[var]] > max_cutoff, max_cutoff, coor_2d$to_plot)
+  }
+  
+  texture = coor_2d[coor_2d$to_plot == "texture", ]
+  dd = coor_2d[coor_2d$to_plot != "texture", ]
+  dd$to_plot = as.numeric(dd$to_plot)
+  
+  dd$point_size = 1 +(20-1) * (dd$to_plot - min(dd$to_plot)) / (max(dd$to_plot) - min(dd$to_plot))
+  
+
+xx = plot_ly() %>%
+  layout(showlegend = FALSE,
+         showscale = FALSE,
+    scene = list(aspectmode='manual',
+                 aspectratio = list(x=5*scale, y=5*scale, z=0.08*scale*1.5), 
+                 camera = list(
+                   eye = list(x = 0, y = 2.5, z = 2.5), # Adjust the camera position for desired angle
+                   up = list(x=-1, y=0, z=0)
+                   ),
+                 xaxis = axx, yaxis = axx, zaxis = axx
+                 )
+    ) %>%
+    add_trace(x = texture$x, y = texture$y, z = texture$z, type = "scatter3d", 
+              colors = "black", size = 0.8, opacity = 0.5, mode = "markers", 
+              marker = list( 
+      opacity = 0.3, 
+      size = 0.8, 
+      color = "black",
+      colors = "black", 
+      showscale = FALSE)
+      ) %>%
+      add_trace(x = dd$x, y = dd$y, z = dd$z, color = dd$to_plot, type = "scatter3d", mode = "markers", 
+            opacity = 0.3, 
+            size = dd$point_size, 
+            sizes = dd$point_size,
+            marker = list(
+      opacity = 0.5, 
+      #size = dd$point_size,
+      sizes = dd$point_size,
+      colorscale = "Viridis",
+      colorbar = NULL, #list(title = NULL),
+      showscale = TRUE
+      ), 
+      showscale = TRUE,
+      showlegend = FALSE)
+return (xx)
+}
+
+```
+
+```{r}
+m1sig<-c('Tnf','Tlr4','Socs3','Ptgs2','Nos2','Nfkbiz','Irf5','Il1b','Il18','Il12b','Gpr18','Fpr2','Cxcl9','Cxcl10','Cd86','Cd38','Azin1')
+
+m2sig<-c('Alocx15','Arg1','Chil3','Chil4','Clec7a','Erg2','Il10','Irf4','Klf4','Mrc1','Mic','Socs2','Tgm2')
+DefaultAssay(infected_aligned) = "SCT"
+length(m2sig) == sum(m2sig %in% rownames(infected_aligned))
+```
+```{r}
+length(rownames(infected_aligned))
+m1sig[m1sig %in% rownames(infected_aligned)]
+m2sig[m2sig %in% rownames(infected_aligned)]
+```
+
+```{r}
+infected_aligned = AddModuleScore(infected_aligned, list(m1sig), name = "sig_1_module", assay = "SCT", slot = "data")
+infected_aligned = AddModuleScore(infected_aligned, list(m2sig), name = "sig_2_module", assay = "SCT", slot = "data")
+```
+```{r}
+tot_coor = readRDS(paste0(path, "data/tot_coor.rds"))
+
+z_values = c(0, 5, 35, 45, 65, 70, 80)
+for ( i in 1:7){
+  tot_coor$z[endsWith(rownames(tot_coor), samples_infected[i])] = z_values[i]
+}
+
+coor_2d = tot_coor[colnames(infected_aligned), c("tissue_x", "tissue_y", "z")]
+colnames(coor_2d)[1:2] = c("x", "y")
+```
+
+```{r}
+
+coor_2d$m1_signature = infected_aligned$sig_1_module1
+coor_2d$m2_signature = infected_aligned$sig_2_module1
+```
+
+```{r}
+hist(coor_2d$m1_signature)
+color_continuous(coor_2d, "m1_signature",  min_cutoff = 0.1, max_cutoff = 0.8)
+```
+
+```{r}
+hist(coor_2d$m2_signature)
+color_continuous(coor_2d, "m2_signature",  min_cutoff = 0.15, max_cutoff = 0.35)
+```

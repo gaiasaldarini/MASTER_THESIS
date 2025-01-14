@@ -1,0 +1,831 @@
+---
+title: "FINAL_comparison_3d"
+author: "Gaia Saldarini"
+date: "2024-12-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## LIBRARY & COLORS
+
+```{r, echo=FALSE, message=FALSE, warning = FALSE}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(stringr)
+library(ggrepel)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggsignif)
+library(readr)
+library(spacexr)
+library(scatterpie)
+library(pheatmap)
+library(SpatialPCA)
+library(glmGamPoi)
+library(harmony)
+#install.packages('devtools')
+#devtools::install_github('immunogenomics/presto')
+library(presto)
+library(igraph)
+library(plotly)
+library(ComplexHeatmap)
+library(circlize)
+library(tidyr)
+library(tibble)
+```
+
+```{r}
+path = "/beegfs/scratch/ric.hsr/Gaia_saldarini/FINAL/"
+```
+
+```{r}
+samples_infected = c("C1", "D1", "C2", "D2", "B3", "C3", "D3")
+cols_samples = brewer.pal(7, "Reds")
+names(cols_samples) = samples_infected
+```
+
+```{r}
+cols_cl_spatial = c(  "darkolivegreen1", "green2", "steelblue4", "tomato","steelblue2", "red2", "gold2", "mediumpurple4", "cyan2", "burlywood2", "snow4")    
+
+names(cols_cl_spatial) = as.character(0:(length(unique(cols_cl_spatial))-1))
+```
+
+```{r}
+cols_cl_pca = c( "green2", "gold2",  "red2", "tan", "cyan", "steelblue", "darkolivegreen1", "steelblue4", "magenta3", "mediumpurple4", "lightblue", "snow4")   
+
+names(cols_cl_pca) = as.character(0:(length(unique(cols_cl_pca))-1))
+```
+
+## FUNCTIONS
+
+```{r}
+composition_clusters = function(d, col_cl, col_vetrini, cl){   # cl sono i cluster in ordine! i levels
+
+d$my_clusters = factor(d$my_clusters, levels = cl)
+df_data = d[[c("my_clusters", "orig.ident")]]
+colnames(df_data) = c("cluster", "vetrino")
+
+composition_df <- df_data %>%
+  group_by(cluster, vetrino) %>%
+  summarise(num_spots = n(), .groups = 'drop')
+
+g1 = ggplot(data=composition_df, aes(x=cluster, y=num_spots, fill = vetrino)) +
+  geom_bar(stat="identity", position="stack") +
+  ylab("number of spots")+
+  scale_fill_manual(values = col_vetrini)
+  ggtitle("Clusters composition by slices [# of spots]")
+    
+
+g2 = ggplot(data=composition_df, aes(x=cluster, y=num_spots, fill= vetrino)) +
+  geom_bar(stat="identity", position="fill") +
+  ggtitle("Clusters composition by slices [% of spots over slice]") +
+  ylab("% of spots") +
+  scale_fill_manual(values = col_vetrini)
+  theme(panel.grid.minor = element_blank())
+
+g3 = ggplot(data=composition_df, aes(x=vetrino, y=num_spots, fill= cluster)) +
+  geom_bar(stat="identity", position="fill") +
+  ggtitle("Slices composition by Seurat clusters [% of spots per cluster]") +
+  xlab("slices")+
+  ylab("% of spots") +
+  scale_fill_manual(values = col_cl)
+theme(panel.grid.minor = element_blank())
+
+return(list(g1, g2, g3, composition_df))
+
+}
+```
+
+```{r}
+ORA_enrich = function(markers){
+  ego_terms = compareCluster(geneClusters = markers, fun = enrichGO, OrgDb='org.Mm.eg.db', keyType="SYMBOL", ont = "BP")
+  ego_terms = clusterProfiler::simplify(ego_terms)
+  p = dotplot(ego_terms, showCategory=10, label_format = 70) + theme(axis.text.y = element_text(size = 8), axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5)) #+ ggtitle(title_ora)
+  return (list(ego_terms, p))
+}
+```
+
+```{r}
+
+hierarchical_order_clusters = function(data, scale_by, macro = FALSE, name){
+
+Idents(data) = data$my_clusters
+rctd = as.matrix(data@assays$RCTD@data, dimnames = list(rownames(data@assays$RCTD@data), data$my_clusters))
+cl = unique(data$my_clusters)
+
+
+if (macro){
+
+rctd_macro = matrix(0, ncol = dim(rctd)[2], nrow = 3)
+rctd_macro[1,] = apply(rctd[list_macro$stromal, ], 2, median)
+rctd_macro[2,] = apply(rctd[list_macro$myeloid, ], 2, median)
+rctd_macro[3,] = apply(rctd[list_macro$lymphoid, ], 2, median)
+colnames(rctd_macro) = colnames(rctd)
+rownames(rctd_macro) = names(list_macro)
+rctd = rctd_macro
+}
+
+
+
+clusters_celltypes_list = lapply(cl, function(x){ 
+  spots = colnames(data)[data$my_clusters == x]
+  apply(rctd[, spots], 1, median)
+  })
+names(clusters_celltypes_list) = cl
+clusters_celltypes <- do.call(cbind, clusters_celltypes_list)
+
+ph = pheatmap::pheatmap(clusters_celltypes, cluster_cols = TRUE, cluster_rows = FALSE, breaks = seq(-1,1,length.out=101), color = colorRampPalette(c('blue','white','red'))(100), scale = scale_by, filename = paste0(path, name), width = 6, height = 5)
+
+ordered_cl = colnames(clusters_celltypes)[ph$tree_col$order]
+#cl = rev(ordered_cl)
+
+return (ordered_cl)
+}
+
+```
+
+
+## SINGLE-CELL LIKE
+
+```{r}
+slices_merged = readRDS(paste0(path, "data/slices_merged.rds"))
+# quality già tolto (D2 e mt)
+```
+
+```{r, fig.height=6, fig.width=10}
+mask = rep(1, dim(slices_merged)[2])
+names(mask)= colnames(slices_merged)
+
+beads = read.csv(paste0(path, "data/beads.csv"))[[1]]
+mask[beads] = 0
+mask = as.logical(mask)
+
+filtered_slices = slices_merged[, mask]
+filtered_slices = filtered_slices[, filtered_slices$orig.ident %in% samples_infected]
+SpatialDimPlot(filtered_slices, ncol = 4, cols = cols_samples) & NoLegend()
+ggsave(paste0(path, "img/comparison/data.png"), height = 6, width = 10)
+```
+
+```{r}
+#dim(filtered_slices)
+filtered_slices[["RNA"]] = filtered_slices[["Spatial"]]
+DefaultAssay(filtered_slices) = "RNA"
+
+filtered_slices[["RNA"]] = split(filtered_slices[["RNA"]], f = filtered_slices$orig.ident)
+filtered_slices <- NormalizeData(filtered_slices)  # sep
+filtered_slices <- FindVariableFeatures(filtered_slices, nfeatures = 3000)   # sep
+filtered_slices <- ScaleData(filtered_slices)  # unito
+filtered_slices <- RunPCA(filtered_slices, assay = "RNA", verbose = FALSE) # boo?
+```
+
+```{r}
+integration_tot <- IntegrateLayers(object = filtered_slices, method = HarmonyIntegration, orig.reduction = "pca",  new.reduction = "harmony", #normalization.method = "SCT", 
+                                     assay = "RNA",
+                        verbose = FALSE)
+
+integration_tot[["RNA"]] <- JoinLayers(integration_tot[["RNA"]])
+
+integration_tot@reductions$harmony@stdev = as.numeric(apply(integration_tot@reductions$harmony@cell.embeddings, 2, stats::sd))
+```
+
+```{r}
+dim(integration_tot@reductions$harmony)
+dim(integration_tot@reductions$pca)
+VizDimLoadings(integration_tot, dims = 1:2, reduction = "pca")
+#VizDimLoadings(integration_tot, dims = 1:2, reduction = "harmony")
+
+#integration_tot@reductions$pca@
+#png(paste0(path, "img/comparison/elbow.png"))
+ElbowPlot(integration_tot, ndims=50, reduction = "harmony") + geom_vline(xintercept = 20, color = "red", linetype = "dashed", size = 1)
+#dev.off()
+
+pc.touse <- (integration_tot$harmony@stdev)^2
+pc.touse <- pc.touse/sum(pc.touse)
+sum(pc.touse)
+pc.touse <- cumsum(pc.touse)[1:50]
+pc.touse[3]
+pc.touse[4]
+pc.touse <- min(which(pc.touse>=0.75))
+pc.touse
+
+# scelgo 20
+```
+
+```{r}
+integration_tot <- FindNeighbors(integration_tot, reduction = "harmony", dims = 1:20)
+```
+```{r}
+DimPlot(integration_tot, group.by = "batch", reduction = "pca")
+ggsave(paste0(path, "img/comparison/umap_dim1.png"))
+DimPlot(integration_tot, group.by = "batch", reduction = "harmony")
+ggsave(paste0(path, "img/comparison/umap_dim11.png"))
+
+DimPlot(integration_tot, group.by = "batch", reduction = "pca", dims = c(2,3))
+ggsave(paste0(path, "img/comparison/umap_dim2.png"))
+DimPlot(integration_tot, group.by = "batch", reduction = "harmony", dims = c(2, 3))
+ggsave(paste0(path, "img/comparison/umap_dim22.png"))
+
+DimPlot(integration_tot, group.by = "batch", reduction = "pca", dims = c(3,4))
+ggsave(paste0(path, "img/comparison/umap_dim3.png"))
+DimPlot(integration_tot, group.by = "batch", reduction = "harmony", dims = c(3, 4))
+ggsave(paste0(path, "img/comparison/umap_dim33.png"))
+```
+
+```{r, fig.width=4, fig.height=3}
+
+res_par = seq(0.2, 1, length.out = 17)
+res_par
+sil_metric = NULL
+n_clusters = NULL
+dist.matrix <-dist(integration_tot@reductions$harmony@cell.embeddings)
+x = integration_tot
+for (i in 1:length(res_par)){
+  print(i)
+  name_cl = paste0("clusters_", res_par[i])
+  x = FindClusters(x, resolution = res_par[i], cluster.name = name_cl)
+  clusters <- x@meta.data[[name_cl]]
+  sil <- cluster::silhouette(x = as.numeric(as.factor(clusters)), dist = dist.matrix)
+  sil_metric[i] <-mean(sil[, 3])
+  n_clusters[i] = length(unique(x@meta.data[[name_cl]]))
+}
+
+sil_df = data.frame(silhouette = sil_metric, resolution = res_par, n_clusters = n_clusters)
+ggplot(sil_df, aes(x=resolution, y=silhouette)) +
+    geom_line() +
+    geom_point() +
+  geom_point(data=sil_df %>% filter(resolution == 0.5), 
+           pch=21, 
+           size=10, 
+           colour="red")
+
+ggsave(paste0(path, "img/comparison/sil1.png"))
+ggplot(sil_df, aes(x=resolution, y=n_clusters)) +
+    geom_line() +
+    geom_point() +
+  geom_point(data=sil_df %>% filter(resolution == 0.5), 
+           pch=21, 
+           size=10, 
+           colour="red")
+ggsave(paste0(path, "img/comparison/sil2.png"))
+``` 
+
+```{r}
+integration_tot <- FindClusters(integration_tot, resolution = 0.5)  # 0.8 default
+integration_tot <- RunUMAP(integration_tot, dims = 1:20, reduction = "harmony")
+```
+
+```{r}
+# metto in seurat_clusters
+integration_tot$seurat_clusters = integration_tot$RNA_snn_res.0.5
+```
+
+```{r, fig.height= 6, fig.width=10}
+SpatialDimPlot(integration_tot, ncol = 4, group.by = "seurat_clusters", cols = cols_cl_pca) + plot_layout(guides = "collect") & NoLegend()
+ggsave(paste0(path, "img/comparison/comp_1.png"), height = 6, width = 10)
+```
+
+
+
+```{r}
+
+Idents(integration_tot) = integration_tot$seurat_clusters
+DimPlot(integration_tot, group.by = "orig.ident")
+ggsave(paste0(path, "img/comparison/comp_2.png"))
+DimPlot(integration_tot, split.by = "orig.ident", ncol = 4, cols = cols_cl_pca)
+ggsave(paste0(path, "img/comparison/comp_3.png"), height = 5, width = 12)
+
+DimPlot(integration_tot, group.by = "batch")
+ggsave(paste0(path, "img/comparison/comp_4.png"))
+DimPlot(integration_tot, split.by = "batch", cols = cols_cl_pca)
+ggsave(paste0(path, "img/comparison/comp_5.png"))
+
+DimPlot(integration_tot, cols = cols_cl_pca)
+ggsave(paste0(path, "img/comparison/comp_6.png"))
+
+DimPlot(integration_tot, group.by = "orig.ident", cols = cols_samples)
+ggsave(paste0(path, "img/comparison/comp_7.png"))
+```
+
+```{r, fig.height=10, fig.width=13}
+# MARKERS
+
+markers_clusters_pca <- FindAllMarkers(integration_tot, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+saveRDS(markers_clusters_pca, paste0(path, "data/markers_pca_tot.rds"))
+markers_clusters_pca = readRDS(paste0(path, "data/markers_pca_tot.rds"))
+```
+
+```{r, fig.width=12, fig.height= 12}
+# HEATMAP 
+#markers_clusters_pca = markers_clusters
+common_genes = intersect(markers_clusters_pca$gene, rownames(integration_tot@assays$RNA$scale.data))
+markers_clusters_pca_filtered = markers_clusters_pca[markers_clusters_pca$gene %in% common_genes, ]
+markers_clusters_pca_filtered %>%
+  filter(p_val_adj < 0.01) %>%
+  group_by(cluster) %>%
+  top_n(n = 3, wt = avg_log2FC) -> top_markers
+  
+#table(top_markers$gene %in% rownames(integration_tot@assays$RNA$scale.data))
+  #top_markers = return_markers(markers, logFC = 0.3, padj = 0.01, n = n_top) # stessa cosa
+  p1 = DoHeatmap(integration_tot, features = top_markers$gene, assay = "RNA", group.colors = cols_cl_pca)+ guides(color = "none")  + theme(axis.text.y = element_text(size = 14))#& NoLegend()
+    p1
+ggsave(paste0(path, "img/comparison/comp_8.png"), width = 12, height = 12)
+
+
+```
+```{r}
+integration_tot$my_clusters = integration_tot$seurat_clusters
+ordered_cl = hierarchical_order_clusters(data = integration_tot, scale_by = "column", macro = FALSE, name = "img/comparison/comp_9.png")
+integration_tot$my_clusters = factor(integration_tot$my_clusters, levels = ordered_cl)
+```
+
+```{r}
+integration_tot$my_clusters = integration_tot$seurat_clusters
+cc = composition_clusters(integration_tot, col_cl = cols_cl_pca, col_vetrini = cols_samples, cl = 0:(length(unique(integration_tot$seurat_clusters))-1))
+cc[[1]] 
+ggsave(paste0(path, "img/comparison/comp_10.png"))    
+cc[[2]] + theme(axis.text.x = element_text(size = 14))
+ggsave(paste0(path, "img/comparison/comp_11.png"))
+
+cc = composition_clusters(integration_tot, col_cl = cols_cl_pca, col_vetrini = cols_samples, cl = ordered_cl)
+cc[[3]]
+ggsave(paste0(path, "img/comparison/comp_12.png"), height = 5, width = 8)
+```
+
+```{r}
+saveRDS(integration_tot, paste0(path, "data/infected_pca.rds"))
+integration_tot = readRDS(paste0(path, "data/infected_pca.rds"))
+saveRDS(rownames(integration_tot@assays$RNA$scale.data), paste0(path, "data/variable_features.rds"))
+```
+
+## VARIABLE FEATURES 
+
+```{r}
+spatially_variable_genes = readRDS(paste0(path, "data/spatially_variable_genes.rds"))
+highly_variable_features = readRDS(paste0(path, "data/variable_features.rds"))
+
+```
+
+```{r}
+display_venn_0 <- function(x, ...){
+  library(VennDiagram)
+  grid.newpage()
+  venn_object <- venn.diagram(x, filename = NULL, cat.cex = 0, cex = 2, ...)
+  grid.draw(venn_object)
+}
+
+display_venn <- function(x, ...){
+  library(VennDiagram)
+  grid.newpage()
+  venn_object <- venn.diagram(x, filename = NULL, cex = 2, ...)
+  grid.draw(venn_object)
+}
+```
+
+```{r}
+variable_genes = list(HighlyVG = highly_variable_features, SpatiallyVG = spatially_variable_genes)
+
+
+```
+
+```{r, fig.height=10, fig.width = 10}
+
+# ORA ENRICHMENT UP E DOWN
+spatial = setdiff(spatially_variable_genes, highly_variable_features)
+pca = setdiff(highly_variable_features, spatially_variable_genes)
+length(spatial)
+length(pca)
+
+markers = list(spatial = spatial, pca = pca)
+
+pp = ORA_enrich(markers)
+pp[[2]]
+#ego_markers_up <- compareCluster(geneClusters = markers, fun = enrichGO, OrgDb='org.Mm.eg.db', keyType="SYMBOL", ont = "BP")
+#ego_markers_up = clusterProfiler::simplify(ego_markers_up)
+#dotplot(ego_markers_up, showCategory=10, label_format = 70) + theme(axis.text.y = element_text(size = 8), axis.text.x = element_text(angle = 30, vjust = 1, hjust=1)) #+ ggtitle(title_ora)
+ggsave(paste0(path, "img/comparison/enrich_variable.png"), height = 10, width = 10)
+
+```
+
+```{r}
+display_venn(
+  variable_genes#,
+  #category.names = c("Secretory" , "Basal"),
+  #fill = c("#999999", "#E69F00")
+  )
+```
+
+```{r}
+png(paste0(path, "img/comparison/genes.png"))
+
+display_venn_0(
+  variable_genes#,
+  #category.names = c("Secretory" , "Basal"),
+  #fill = c("#999999", "#E69F00")
+  )
+dev.off()
+```
+
+
+## MARKERS
+
+```{r}
+harmony_spatialPCA_3D = readRDS(paste0(path, "data/harmony_spatialPCA_3D.rds"))
+```
+
+```{r, fig.width=10, fig.height= 12}
+# HEATMAP 
+
+markers_clusters_spatial = readRDS(paste0(path, "data/markers_infected_3D_pre.rds"))
+common_genes = intersect(markers_clusters_spatial$gene, rownames(harmony_spatialPCA_3D@assays$SCT$scale.data))
+markers_clusters_spatial_filtered = markers_clusters_spatial[markers_clusters_spatial$gene %in% common_genes, ]
+dim(markers_clusters_spatial_filtered)
+table(markers_clusters_spatial$gene %in% common_genes)
+
+markers_clusters_spatial_filtered %>%
+  filter(p_val_adj < 0.01) %>%
+  group_by(cluster) %>%
+  top_n(n = 8, wt = avg_log2FC) -> top_markers
+
+```
+
+```{r}
+dim(markers_clusters_pca_filtered)
+dim(markers_clusters_spatial_filtered)
+# perchè stesso gene può essere marker 2 volte di 2 clusters diversi
+```
+```{r}
+markers_clusters_pca = readRDS(paste0(path, "data/markers_pca_tot.rds"))
+```
+
+```{r}
+markers_clusters_pca_filtered = markers_clusters_pca
+markers_clusters_spatial_filtered = markers_clusters_spatial
+```
+
+
+```{r, fig.width = 3, fig.height = 4}
+threshold = 0.5
+markers_clusters_pca_filtered %>%
+  filter(avg_log2FC > threshold) %>%
+  filter(p_val_adj < 0.01) %>%
+  group_by(cluster) %>%
+  summarize(num_markers = n()) -> valid_markers_count_pca
+df_pca = data.frame(counts = valid_markers_count_pca$num_markers, cluster = valid_markers_count_pca$cluster, dim_red = "PCA")
+
+markers_clusters_spatial_filtered %>%
+  filter(avg_log2FC > threshold) %>%
+  filter(p_val_adj < 0.01) %>%
+  group_by(cluster) %>%
+  summarize(num_markers = n()) -> valid_markers_count_spatial
+df_spatial = data.frame(counts = valid_markers_count_spatial$num_markers, cluster = valid_markers_count_spatial$cluster, dim_red = "spatialPCA")
+
+
+#library(ggsignif)
+df = rbind(df_pca, df_spatial)
+
+ggplot(df, aes(x=dim_red, y = counts)) +
+  geom_boxplot(outliers = FALSE) +
+  theme(axis.text.x = element_text(size = 14),     # Increase category label size
+    axis.title.x = element_blank()#,            # Remove the x-axis title
+    #axis.text = element_text(size = 14) 
+    )
+  #geom_signif(comparisons = list(c("spatialPCA", "PCA")), 
+  #             map_signif_level = TRUE)
+
+```
+
+```{r}
+threshold = 1
+markers_clusters_pca_filtered %>%
+  filter(avg_log2FC > threshold) %>%
+  filter(p_val_adj < 0.01) %>%
+  select(gene) -> pca_markers
+
+markers_clusters_spatial_filtered %>%
+  filter(avg_log2FC > threshold) %>%
+  filter(p_val_adj < 0.01) %>%
+  select(gene) -> spatial_markers
+```
+
+```{r}
+variable_genes = list(HighlyVG = highly_variable_features, SpatiallyVG = spatially_variable_genes, markers_pca = unique(pca_markers$gene), markers_spatial = unique(spatial_markers$gene))
+
+display_venn(
+  variable_genes#,
+  #category.names = c("Secretory" , "Basal"),
+  #fill = c("#999999", "#E69F00")
+  )
+```
+```{r}
+png(paste0(path, "img/comparison/markers_common_1.png"))
+
+display_venn_0(
+  variable_genes#,
+  #category.names = c("Secretory" , "Basal"),
+  #fill = c("#999999", "#E69F00")
+  )
+dev.off()
+```
+
+```{r}
+variable_genes = list(markers_pca = unique(pca_markers$gene), markers_spatial = unique(spatial_markers$gene))
+
+display_venn(
+  variable_genes#,
+  #category.names = c("Secretory" , "Basal"),
+  #fill = c("#999999", "#E69F00")
+  )
+
+png(paste0(path, "img/comparison/markers_common_2.png"))
+
+display_venn_0(
+  variable_genes#,
+  #category.names = c("Secretory" , "Basal"),
+  #fill = c("#999999", "#E69F00")
+  )
+dev.off()
+```
+
+```{r, fig.height=10, fig.width = 10}
+
+# ORA ENRICHMENT UP E DOWN
+spatial = setdiff(unique(spatial_markers$gene), unique(pca_markers$gene))
+pca = setdiff(unique(pca_markers$gene), unique(spatial_markers$gene))
+length(spatial)
+length(pca)
+
+markers = list(spatial = spatial, pca = pca)
+
+pp = ORA_enrich(markers)
+pp[[2]]
+#ego_markers_up <- compareCluster(geneClusters = markers, fun = enrichGO, OrgDb='org.Mm.eg.db', keyType="SYMBOL", ont = "BP")
+#ego_markers_up = clusterProfiler::simplify(ego_markers_up)
+#dotplot(ego_markers_up, showCategory=10, label_format = 70) + theme(axis.text.y = element_text(size = 8), axis.text.x = element_text(angle = 30, vjust = 1, hjust=1)) #+ ggtitle(title_ora)
+ggsave(paste0(path, "img/comparison/enirch_markers.png"), height = 10, width = 10)
+
+```
+
+```{r}
+
+Idents(integration_tot) = factor(integration_tot$seurat_clusters, levels = 0:(length(unique(integration_tot$seurat_clusters))-1))
+markers_clusters_pca <- FindAllMarkers(integration_tot[, integration_tot$orig.ident %in% samples_infected], only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+```
+
+```{r}
+# MARKERS
+
+Idents(infected_aligned) = factor(infected_aligned$my_clusters, levels = names(cols_cl_spatial))
+markers_clusters_spatial <- FindAllMarkers(infected_aligned, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+
+```
+
+
+```{r, fig.width = 3, fig.height = 4}
+threshold = 2.5
+markers_clusters_pca %>%
+  filter(avg_log2FC > threshold) %>%
+  filter(p_val_adj < 0.01) %>%
+  group_by(cluster) %>%
+  summarize(num_markers = n()) -> valid_markers_count_pca
+df_pca = data.frame(counts = valid_markers_count_pca$num_markers, cluster = valid_markers_count_pca$cluster, dim_red = "PCA")
+
+markers_clusters_spatial %>%
+  filter(avg_log2FC > threshold) %>%
+  filter(p_val_adj < 0.01) %>%
+  group_by(cluster) %>%
+  summarize(num_markers = n()) -> valid_markers_count_spatial
+df_spatial = data.frame(counts = valid_markers_count_spatial$num_markers, cluster = valid_markers_count_spatial$cluster, dim_red = "spatialPCA")
+
+
+#library(ggsignif)
+df = rbind(df_pca, df_spatial)
+
+ggplot(df, aes(x=dim_red, y = counts)) +
+  geom_boxplot(outliers = FALSE) +
+  theme(axis.text.x = element_text(size = 14),     # Increase category label size
+    axis.title.x = element_blank()#,            # Remove the x-axis title
+    #axis.text = element_text(size = 14) 
+    )
+  #geom_signif(comparisons = list(c("spatialPCA", "PCA")), 
+  #             map_signif_level = TRUE)
+
+```
+
+
+
+## MORAN
+
+```{r}
+library(ape)
+```
+
+```{r}
+harmony_spatialPCA_3D = readRDS(paste0(path, "data/harmony_spatialPCA_3D.rds"))
+integration_tot = readRDS(paste0(path, "data/infected_pca.rds"))
+```
+
+```{r}
+
+make_dist = function(df_coords){
+  dist_matrix <- as.matrix(dist(df_coords))
+  dist_inv <- 1/dist_matrix
+  diag(dist_inv) <- 0
+  #dist_inv <- dist_inv / rowSums(dist_inv) # Normalize weights
+  return (dist_inv)
+}
+
+moran_function = function(coords_list, labels, samples){
+
+moran_index = data.frame(sample = unlist(lapply(unique(samples), function(x){ rep(x, length(unique(labels)))})), 
+                         cluster = rep(0:(length(unique(labels))-1), 7), 
+                         moran = NA)
+
+for (j in unique(samples)){
+  mat = make_dist(coords_list[[j]])
+  lab = labels[endsWith(names(labels), j)]
+  for (i in unique(lab)){
+    dummy_lab = as.numeric(lab == i)
+    #if (length(unique(dummy_lab)) > 1){
+    moran_index[moran_index$sample == j & moran_index$cluster == i, "moran"] = Moran.I(dummy_lab, mat, scaled = TRUE, na.rm = TRUE, alternative = "two.sided")$observed
+    #}
+  }
+}
+ return(moran_index)
+}
+
+
+```
+
+```{r}
+labels = harmony_spatialPCA_3D$seurat_clusters
+samples = harmony_spatialPCA_3D$orig.ident
+coords_list <- lapply(harmony_spatialPCA_3D@images, function(df) {
+  df@coordinates[, c("tissue_x", "tissue_y")]
+})
+
+spatial = moran_function(coords_list = coords_list, labels = labels, samples = samples)
+```
+
+```{r}
+labels = integration_tot$seurat_clusters
+samples = integration_tot$orig.ident
+coords_list <- lapply(as.character(unique(samples)), function(x) {
+  GetTissueCoordinates(integration_tot@images[[x]])
+})
+names(coords_list) = as.character(unique(samples))
+
+sc_like = moran_function(coords_list = coords_list, labels = labels, samples = samples)
+```
+
+```{r, fig.width = 4, fig.height=4}
+spatial$workflow = "spatial"
+sc_like$workflow = "sc_like"
+#three_d$workflow = "3d"
+df_tot_1 = rbind(spatial, sc_like)
+df_tot$workflow = as.factor(df_tot$workflow)
+ggplot(df_tot, aes(y=moran, x = workflow)) + 
+  geom_boxplot() + 
+  geom_signif(comparisons = list(c("sc_like", "spatial")), 
+              map_signif_level = FALSE)+
+  theme(axis.text.x = element_text(size = 12))
+```
+
+```{r}
+labels = harmony_spatialPCA_3D$seurat_clusters
+samples = harmony_spatialPCA_3D$orig.ident
+coords_list <- lapply(harmony_spatialPCA_3D@images, function(df) {
+  df@coordinates[, c("tissue_x", "tissue_y", "z")]
+})
+df_coords <- do.call(rbind, coords_list)
+colnames(df_coords) = c("x", "y", "z")
+df_coords$z = df_coords$z / 10
+rownames(df_coords) = substr(rownames(df_coords), 4, nchar(rownames(df_coords)))
+
+moran_index = data.frame(sample = unlist(lapply(unique(samples), function(x){ rep(x, length(unique(labels)))})), 
+                         cluster = rep(0:(length(unique(labels))-1), 7), 
+                         moran = NA)
+
+mat = make_dist(df_coords)
+  for (i in 0:(length(unique(labels))-1)){
+    print(i)
+    dummy_lab = as.numeric(labels == i)
+    moran_index[moran_index$cluster == i, "moran"] = Moran.I(dummy_lab, mat, scaled = TRUE, na.rm = TRUE, alternative = "two.sided")$observed
+  }
+three_d_real = moran_index
+```
+```{r}
+labels = integration_tot$seurat_clusters
+
+moran_index = data.frame(sample = unlist(lapply(unique(samples), function(x){ rep(x, length(unique(labels)))})), 
+                         cluster = rep(0:(length(unique(labels))-1), 7), 
+                         moran = NA)
+
+all(rownames(df_coords) == names(labels))
+  for (i in 0:(length(unique(labels))-1)){
+    print(i)
+    dummy_lab = as.numeric(labels == i)
+    moran_index[moran_index$cluster == i, "moran"] = Moran.I(dummy_lab, mat, scaled = TRUE, na.rm = TRUE, alternative = "two.sided")$observed
+  }
+three_d_sc = moran_index
+```
+
+```{r, fig.width = 4, fig.height=4}
+three_d_real$workflow = "spatial_3d"
+three_d_sc$workflow = "sc_like_3d"
+df_tot_2 = rbind(three_d_real, three_d_sc)
+df_tot$workflow = as.factor(df_tot$workflow)
+ggplot(df_tot, aes(y=moran, x = workflow, fill = workflow)) + 
+  geom_boxplot() + 
+  geom_signif(comparisons = list(c("sc_like_3d", "spatial_3d")), 
+              map_signif_level = FALSE)+
+  ylim(c(0, 0.2))+
+  theme(axis.text.x = element_text(size = 12))
+
+df_tot$cluster = as.factor(df_tot$cluster)
+ggplot(df_tot, aes(y=moran, x = workflow)) + 
+  geom_boxplot() + 
+  geom_signif(comparisons = list(c("sc_like_3d", "spatial_3d")), 
+              map_signif_level = FALSE)+
+  #facet_grid(cluster) +
+  theme(axis.text.x = element_text(size = 12))
+```
+
+```{r, fig.width = 4, fig.height=4}
+
+df_tot = rbind(df_tot_1, df_tot_2)
+df_tot$space = ifelse(endsWith(df_tot$workflow, "3d"), "3d", "2d")
+df_tot$space = factor(df_tot$space, levels = c("2d", "3d"))
+df_tot$workflow = as.character(df_tot$workflow)
+table(df_tot$workflow)
+df_tot$workflow = ifelse(endsWith(df_tot$workflow, "d"), substr(df_tot$workflow, 1, nchar(df_tot$workflow)-3), df_tot$workflow)
+ggplot(df_tot, aes(y=moran, x = workflow)) + 
+  geom_boxplot() + 
+  geom_signif(comparisons = list(c("sc_like", "spatial")), 
+              map_signif_level = FALSE)+
+  facet_grid(~ space, switch = "x" )+
+  theme(axis.text.x = element_text(size = 12), strip.text = element_text(size = 12))
+
+df_tot$cluster = as.factor(df_tot$cluster)
+ggplot(df_tot, aes(y=moran, x = workflow)) + 
+  geom_boxplot() + 
+  geom_signif(comparisons = list(c("sc_like_3d", "spatial_3d")), 
+              map_signif_level = FALSE)+
+  facet_grid(cluster) +
+  theme(axis.text.x = element_text(size = 12))
+```
+
+```{r}
+spatial$workflow = "spatial"
+sc_like$workflow = "sc_like"
+three_d$workflow = "3d"
+df_tot = rbind(spatial, sc_like, three_d)
+df_tot$workflow = as.factor(df_tot$workflow)
+ggplot(df_tot, aes(y=moran, x = workflow)) + 
+  geom_boxplot() + 
+  geom_signif(comparisons = list(c("sc_like", "spatial")), 
+              map_signif_level = FALSE)
+  
+```
+
+```{r}
+df_coords <- do.call(rbind, coords_list)
+colnames(df_coords) = c("x", "y", "z")
+df_coords$x = df_coords$x * 10
+df_coords$y = df_coords$y * 10
+rownames(df_coords) = substr(rownames(df_coords), 4, nchar(rownames(df_coords)))
+```
+
+#####
+
+```{r}
+install.packages("spdep")
+library("spdep")
+
+# Example data: categorical variable with 3 categories
+categories <- c("A", "B", "A", "C", "B", "A", "C", "C", "B", "A")
+
+# Coordinates for spatial units
+coords <- cbind(c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), c(1, 1, 1, 2, 2, 2, 3, 3, 3, 4))
+
+# Create a spatial neighbors object based on distances
+nb <- dnearneigh(coords, 0, 1.5) # Neighbors within distance 1.5
+weights <- nb2listw(nb, style = "B") # Binary weights
+
+# Convert the categories into a factor
+categories <- factor(categories)
+
+# Calculate global join count statistics
+global_joincount <- joincount.multi(categories, weights)
+
+# View the results
+print(global_joincount)
+```
+

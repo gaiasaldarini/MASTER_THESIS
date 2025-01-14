@@ -1,0 +1,815 @@
+---
+title: "analysis_10"
+author: "Gaia Saldarini"
+date: "2024-11-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## LIBRARY & COLORS
+
+```{r, message=FALSE, warning = FALSE}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(stringr)
+library(ggrepel)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggsignif)
+library(readr)
+library(spacexr)
+library(scatterpie)
+library(pheatmap)
+library(SpatialPCA)
+library(glmGamPoi)
+library(harmony)
+#install.packages('devtools')
+#devtools::install_github('immunogenomics/presto')
+library(presto)
+library(igraph)
+library(plotly)
+library(ComplexHeatmap)
+library(circlize)
+library(tidyr)
+library(tibble)
+```
+
+```{r}
+path = "/beegfs/scratch/ric.hsr/Gaia_saldarini/FINAL/"
+```
+
+```{r}
+samples_tot = c("A1", "B1", "A3", "C1", "D1", "C2", "D2", "B3", "C3", "D3")
+
+reds = brewer.pal(7, "Reds")
+blues = brewer.pal(3, "Blues")
+cols_samples_tot = c(blues, reds)
+names(cols_samples_tot) = samples_tot
+```
+
+```{r}
+conditions = c("Infected", "Ctrl")
+
+cols_cond = c("red3", "green3")
+names(cols_cond) = conditions
+```
+
+```{r}
+cols_celltypes <- c(
+        "Alveolar epithelial cells" = "#780116",
+        "Club cells" = "#f7b538",
+        "Fibroblast" = "red",
+        "Endothelial cells" = "yellow",
+        
+        "Monocytes" = "#a9d6e5",
+        "Macrophages" = "#0496ff",
+        "Dendritic cells" = "blue",
+        "Neutrophils" = "#7DF3FF",
+        
+        "B cells" = "black",
+        "T cells" = "grey",
+        
+        "NK cells" = "#6f2dbd",
+        "Erythrocytes" = "#f896d8")
+```
+
+```{r}
+list_macro = list(stromal = c("Alveolar epithelial cells", "Club cells", "Fibroblast", "Endothelial cells", "Erythrocytes"), myeloid = c("Monocytes", "Macrophages", "Dendritic cells", "Neutrophils"), lymphoid = c("B cells", "T cells", "NK cells"))
+
+cols_macro = c( "tan1", "dodgerblue", "snow4")
+names(cols_macro) = c("stromal", "myeloid", "lymphoid")
+
+```
+
+```{r}
+cols_cl_tot = c("darkolivegreen1", "gold", "lightsalmon1", "green2",  "cadetblue4", "darkgreen", "darkmagenta", "red3",  "blue","deepskyblue1" , "snow3", "cyan", "mediumpurple1")#,  )
+names(cols_cl_tot) = as.character(0:(length(unique(cols_cl_tot))-1))
+```
+
+## FUNCTIONS
+
+```{r}
+composition_clusters = function(d, col_cl, col_vetrini, cl){   # cl sono i cluster in ordine! i levels
+
+d$my_clusters = factor(d$my_clusters, levels = cl)
+df_data = d[[c("my_clusters", "orig.ident")]]
+colnames(df_data) = c("cluster", "vetrino")
+
+composition_df <- df_data %>%
+  group_by(cluster, vetrino) %>%
+  summarise(num_spots = n(), .groups = 'drop')
+
+g1 = ggplot(data=composition_df, aes(x=cluster, y=num_spots, fill = vetrino)) +
+  geom_bar(stat="identity", position="stack") +
+  ylab("number of spots")+
+  scale_fill_manual(values = col_vetrini)
+  ggtitle("Clusters composition by slices [# of spots]")
+    
+
+g2 = ggplot(data=composition_df, aes(x=cluster, y=num_spots, fill= vetrino)) +
+  geom_bar(stat="identity", position="fill") +
+  ggtitle("Clusters composition by slices [% of spots over slice]") +
+  ylab("% of spots") +
+  scale_fill_manual(values = col_vetrini)
+  theme(panel.grid.minor = element_blank())
+
+g3 = ggplot(data=composition_df, aes(x=vetrino, y=num_spots, fill= cluster)) +
+  geom_bar(stat="identity", position="fill") +
+  ggtitle("Slices composition by Seurat clusters [% of spots per cluster]") +
+  xlab("slices")+
+  ylab("% of spots") +
+  scale_fill_manual(values = col_cl)
+theme(panel.grid.minor = element_blank())
+
+return(list(g1, g2, g3, composition_df))
+
+}
+```
+
+```{r}
+deconv_barplots = function(data, cl){
+  
+samples = unique(data$orig.ident)
+x = t(data@assays$RCTD$data)
+
+df <- as.data.frame(x) %>%
+  rownames_to_column(var = "vertex") %>%  # Move row names (cell types) to a column
+  pivot_longer(cols = -vertex, 
+               names_to = "cell_type", 
+               values_to = "fraction")
+df$sample = data$orig.ident[df$vertex]
+df$my_clusters = data$my_clusters[df$vertex]
+  
+df$my_clusters = factor(df$my_clusters, levels = cl) 
+df$fraction = round(df$fraction, 3)
+df$cell_type = factor(df$cell_type, levels = names(cols_celltypes))
+
+g1 = ggplot(df, aes(fill=cell_type, y=fraction, x=sample)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5, size = 5),
+        strip.text = element_text(size = 6))+
+  scale_fill_manual(values=cols_celltypes)# +
+
+g2 = ggplot(df, aes(fill=cell_type, y=fraction, x=my_clusters)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  #facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5, size = 15),
+        strip.text = element_text(size = 6))+
+  scale_fill_manual(values=cols_celltypes)# +
+
+df$macro_celltype = ifelse(df$cell_type %in% list_macro$stromal, "stromal", ifelse(df$cell_type %in% list_macro$myeloid, "myeloid", "lymphoid"))
+df$macro_celltype = factor(df$macro_celltype, levels = names(cols_macro))
+
+g3 = ggplot(df, aes(fill=macro_celltype, y=fraction, x=sample)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5, size = 5),
+        strip.text = element_text(size = 6))+
+  scale_fill_manual(values=cols_macro)
+
+g4 = ggplot(df, aes(fill=macro_celltype, y=fraction, x=my_clusters)) + 
+    geom_bar(position="fill", stat="identity", color = NA) +
+  #facet_grid(~ my_clusters, switch = "x" ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  #theme_void() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5, size = 15),
+        strip.text = element_text(size = 6))+
+  scale_fill_manual(values=cols_macro)
+
+  return (list(g1, g2, g3, g4))
+}
+```
+
+
+```{r}
+cols_DEGS <- c("up" = "red", "down" = "green", "ns" = "grey")
+
+make_vulcano = function(df, threshold_FC, threshold_padj, title){
+
+df <- df %>%
+  mutate(gene_type = case_when(avg_log2FC > threshold_FC & p_val_adj < threshold_padj ~ "up",
+                               avg_log2FC < (-threshold_FC) & p_val_adj < threshold_padj ~ "down",
+                               TRUE ~ "ns")) 
+
+myvolcanoplot <- ggplot(data = df, aes(x = avg_log2FC, y = -log10(p_val_adj)), fill = gene_type) +
+  geom_point(size = 1, aes(color = gene_type)) +  
+  #facet_grid(~ comparison) +
+  geom_vline(xintercept = c(-threshold_FC, threshold_FC), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(threshold_padj), col = "gray", linetype = 'dashed') + 
+  ggtitle(paste0("Vulcano plot - ", title)) +
+  scale_colour_manual(values = cols_DEGS) 
+ #geom_text_repel(max.overlaps = Inf, label = df$delabel)
+
+myvolcanoplot
+}
+
+
+# chiamata: make_vulcano(df, i)
+# df: data.frame da FindMarkers
+```
+
+```{r}
+return_valid_markers = function(x, padj = 0.1, logFC = 1, type = "up", n = NA){
+
+  if (type == "up"){
+   x %>%
+  filter(avg_log2FC > logFC) %>%
+  filter(p_val_adj < padj)  -> valid_markers 
+    
+    if (!is.na(n)){
+    valid_markers %>%
+      group_by(cluster) %>%
+      slice_max(order_by = avg_log2FC, n = n) %>% 
+      ungroup() -> valid_markers
+    }
+  } else if (type == "down"){
+    x %>%
+  filter(avg_log2FC < logFC) %>%
+  filter(p_val_adj < padj)  -> valid_markers
+    
+    if (!is.na(n)){
+    valid_markers %>%
+      group_by(cluster) %>%
+      slice_max(order_by = - avg_log2FC, n = n) %>% 
+      ungroup() -> valid_markers
+    }
+  }
+  
+   return (valid_markers)
+}
+
+
+```
+
+```{r}
+ORA_enrich = function(markers){
+  ego_terms = compareCluster(geneClusters = markers, fun = enrichGO, OrgDb='org.Mm.eg.db', keyType="SYMBOL", ont = "BP")
+  ego_terms = clusterProfiler::simplify(ego_terms)
+  p = dotplot(ego_terms, showCategory=10, label_format = 70) + theme(axis.text.y = element_text(size = 8), axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5)) #+ ggtitle(title_ora)
+  return (list(ego_terms, p))
+}
+```
+
+```{r}
+
+hierarchical_order_clusters = function(data, scale_by, macro = FALSE, name){
+
+Idents(data) = data$my_clusters
+rctd = as.matrix(data@assays$RCTD@data, dimnames = list(rownames(data@assays$RCTD@data), data$my_clusters))
+cl = unique(data$my_clusters)
+
+
+if (macro){
+
+rctd_macro = matrix(0, ncol = dim(rctd)[2], nrow = 3)
+rctd_macro[1,] = apply(rctd[list_macro$stromal, ], 2, median)
+rctd_macro[2,] = apply(rctd[list_macro$myeloid, ], 2, median)
+rctd_macro[3,] = apply(rctd[list_macro$lymphoid, ], 2, median)
+colnames(rctd_macro) = colnames(rctd)
+rownames(rctd_macro) = names(list_macro)
+rctd = rctd_macro
+}
+
+
+
+clusters_celltypes_list = lapply(cl, function(x){ 
+  spots = colnames(data)[data$my_clusters == x]
+  apply(rctd[, spots], 1, median)
+  })
+names(clusters_celltypes_list) = cl
+clusters_celltypes <- do.call(cbind, clusters_celltypes_list)
+
+ph = pheatmap::pheatmap(clusters_celltypes, cluster_cols = TRUE, cluster_rows = FALSE, breaks = seq(-1,1,length.out=101), color = colorRampPalette(c('blue','white','red'))(100), scale = scale_by, filename = paste0(path, name), width = 6, height = 5, angle_col = 90, cellheight = 20, cellwidth = 20)
+
+ordered_cl = colnames(clusters_celltypes)[ph$tree_col$order]
+#cl = rev(ordered_cl)
+
+return (ordered_cl)
+}
+
+```
+
+```{r}
+
+order_clusters = function(data, scale_by, macro = FALSE, condition, name, cl){
+
+Idents(data) = data$my_clusters
+rctd = as.matrix(data@assays$RCTD@data, dimnames = list(rownames(data@assays$RCTD@data), data$my_clusters))
+
+if (macro){
+
+rctd_macro = matrix(0, ncol = dim(rctd)[2], nrow = 3)
+rctd_macro[1,] = apply(rctd[list_macro$stromal, ], 2, median)
+rctd_macro[2,] = apply(rctd[list_macro$myeloid, ], 2, median)
+rctd_macro[3,] = apply(rctd[list_macro$lymphoid, ], 2, median)
+colnames(rctd_macro) = colnames(rctd)
+rownames(rctd_macro) = names(list_macro)
+rctd = rctd_macro
+}
+
+clusters_celltypes_list = lapply(cl, function(x){ 
+  spots = colnames(data)[data$my_clusters == x & data$condition == condition]
+  apply(rctd[, spots], 1, median)
+  })
+names(clusters_celltypes_list) = cl 
+clusters_celltypes <- do.call(cbind, clusters_celltypes_list)
+
+pp = pheatmap::pheatmap(clusters_celltypes, cluster_cols = FALSE, cluster_rows = FALSE, breaks = seq(-1,1,length.out=101), color = colorRampPalette(c('blue','white','red'))(100), scale = scale_by, fontsize_row = 12, fontsize_col = 12,  angle_col = 90, cellheight = 20, cellwidth = 20, main = condition, filename = paste0(path, name), height = 8, width = 12)
+
+return (clusters_celltypes)
+}
+
+```
+
+## SC-LIKE pipeline
+per integrazione parto dal merged
+
+```{r}
+slices_merged = readRDS(paste0(path, "data/slices_merged.rds"))
+slices_merged[["Spatial"]] <- split(slices_merged[["Spatial"]], f = slices_merged$orig.ident)
+# quality già tolto (low quality e mt)
+```
+
+```{r, fig.height=6, fig.width=10, warning = FALSE}
+# tolgo beads
+
+mask = rep(1, dim(slices_merged)[2])
+names(mask)= colnames(slices_merged)
+
+beads = read.csv(paste0(path, "data/beads.csv"))[[1]]
+mask[beads] = 0
+mask = as.logical(mask)
+
+host_genes = read.csv(paste0(path, "/data/host_genes.csv"))[[1]]
+length(host_genes)
+
+filtered_slices = slices_merged[host_genes, mask]
+filtered_slices[["RCTD"]] = CreateAssayObject(data = slices_merged@assays$RCTD$data[, colnames(filtered_slices)])
+
+SpatialDimPlot(filtered_slices, ncol = 5, cols = cols_samples_tot) & NoLegend()
+ggsave(paste0(path, "img/host_10/technical_1.png"), height = 5, width = 10)
+```
+
+```{r, warning = FALSE, message = FALSE, verbose = FALSE}
+#dim(filtered_slices)
+filtered_slices[["RNA"]] = filtered_slices[["Spatial"]]
+DefaultAssay(filtered_slices) = "RNA"
+
+filtered_slices <- NormalizeData(filtered_slices)  # sep
+filtered_slices <- FindVariableFeatures(filtered_slices)   # sep
+filtered_slices <- ScaleData(filtered_slices)  # unito
+filtered_slices <- RunPCA(filtered_slices, assay = "RNA", verbose = FALSE) # boo?
+```
+
+```{r, warning = FALSE,  message = FALSE, verbose = FALSE}
+top10 <- head(VariableFeatures(filtered_slices), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(filtered_slices)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+png(paste0(path, "img/host_10/technical_2.png"))
+plot1
+dev.off()
+
+plot1
+```
+
+```{r, warning = FALSE}
+integration_tot <- IntegrateLayers(object = filtered_slices, method = HarmonyIntegration, orig.reduction = "pca",  new.reduction = "harmony", #normalization.method = "SCT", 
+                                     assay = "RNA",
+                        verbose = FALSE)
+
+integration_tot[["RNA"]] <- JoinLayers(integration_tot[["RNA"]])
+
+integration_tot@reductions$harmony@stdev = as.numeric(apply(integration_tot@reductions$harmony@cell.embeddings, 2, stats::sd))
+```
+
+```{r}
+integration_tot$orig.ident = factor(integration_tot$orig.ident, levels = samples_tot)
+```
+
+```{r, warning = FALSE, fig.height = 8, fig.width = 10}
+dim(integration_tot@reductions$harmony)
+dim(integration_tot@reductions$pca)
+VizDimLoadings(integration_tot, dims = 1:2, reduction = "pca")
+#VizDimLoadings(integration_tot, dims = 1:2, reduction = "harmony")
+
+```
+
+```{r}
+#integration_tot@reductions$pca@
+png(paste0(path, "img/host_10/technical_3.png"))
+ElbowPlot(integration_tot, ndims=50, reduction = "harmony") + geom_vline(xintercept = 20, color = "red", linetype = "dashed", size = 1)
+dev.off()
+
+ElbowPlot(integration_tot, ndims=50, reduction = "harmony") + geom_vline(xintercept = 20, color = "red", linetype = "dashed", size = 1)
+
+pc.touse <- (integration_tot$harmony@stdev)^2
+pc.touse <- pc.touse/sum(pc.touse)
+pc.touse <- cumsum(pc.touse)[1:50]
+pc.touse <- min(which(pc.touse>=0.75))
+pc.touse
+
+# scelgo 20
+```
+
+```{r}
+integration_tot <- FindNeighbors(integration_tot, reduction = "harmony", dims = 1:20)
+```
+
+```{r, fig.width=4, fig.height=3, message = FALSE, verbose = FALSE}
+
+res_par = seq(0.2, 1, length.out = 17)
+res_par
+sil_metric = NULL
+n_clusters = NULL
+dist.matrix <-dist(integration_tot@reductions$harmony@cell.embeddings)
+x = integration_tot
+for (i in 1:length(res_par)){
+  print(i)
+  name_cl = paste0("clusters_", res_par[i])
+  x = FindClusters(x, resolution = res_par[i], cluster.name = name_cl)
+  clusters <- x@meta.data[[name_cl]]
+  sil <- cluster::silhouette(x = as.numeric(as.factor(clusters)), dist = dist.matrix)
+  sil_metric[i] <-mean(sil[, 3])
+  n_clusters[i] = length(unique(x@meta.data[[name_cl]]))
+}
+
+sil_df = data.frame(silhouette = sil_metric, resolution = res_par, n_clusters = n_clusters)
+ggplot(sil_df, aes(x=resolution, y=silhouette)) +
+    geom_line() +
+    geom_point() +
+  geom_point(data=sil_df %>% filter(resolution > 0.45 & resolution < 0.55), 
+           pch=21, 
+           size=10, 
+           colour="red")
+
+ggsave(paste0(path, "img/host_10/technical_4.png"))
+ggplot(sil_df, aes(x=resolution, y=n_clusters)) +
+    geom_line() +
+    geom_point() +
+  geom_point(data=sil_df %>% filter(resolution > 0.45 & resolution < 0.55), 
+           pch=21, 
+           size=10, 
+           colour="red")
+ggsave(paste0(path, "img/host_10/technical_5.png"))
+``` 
+
+
+```{r, message = FALSE, verbose = FALSE}
+integration_tot <- FindClusters(integration_tot, resolution = 0.5)  # 0.8 default
+integration_tot <- RunUMAP(integration_tot, dims = 1:20, reduction = "harmony")
+```
+
+```{r}
+# metto in seurat_clusters
+integration_tot$seurat_clusters = integration_tot$RNA_snn_res.0.5
+table(integration_tot$seurat_clusters)
+```
+
+```{r, fig.height= 6, fig.width=10}
+SpatialDimPlot(integration_tot, ncol = 5, group.by = "seurat_clusters", cols = cols_cl_tot) & NoLegend()
+ggsave(paste0(path, "img/host_10/fig1.png"), height = 6, width = 10)
+```
+
+```{r, fig.width=4, fig.height=6}
+# PAPER
+Idents(integration_tot) = integration_tot$seurat_clusters
+SpatialDimPlot(integration_tot[, integration_tot$orig.ident %in% c("A1", "C1")], ncol = 1, group.by = "seurat_clusters", cols = cols_cl_tot)  & NoLegend() #plot_layout(guides = "collect")
+#ggsave(paste0(path, "img/host_10/fig1.png"), height = 8, width = 10)
+DimPlot(integration_tot, reduction = "umap", cols = cols_cl_tot, ncol = 1, split.by = "condition") #+ NoLegend()
+```
+
+```{r, message = FALSE}
+DimPlot(integration_tot, reduction = "pca", group.by = "orig.ident", cols = cols_samples_tot)
+ggsave(paste0(path, "img/host_10/fig2.png"))#, height = 8, width = 10)
+DimPlot(integration_tot, reduction = "harmony", group.by = "orig.ident", cols = cols_samples_tot)
+ggsave(paste0(path, "img/host_10/fig3.png"))#, height = 8, width = 10)
+DimPlot(integration_tot, reduction = "pca", group.by = "batch")
+ggsave(paste0(path, "img/host_10/fig4.png"))#, height = 8, width = 10)
+DimPlot(integration_tot, reduction = "harmony", group.by = "batch")
+ggsave(paste0(path, "img/host_10/fig5.png"))#, height = 8, width = 10)
+DimPlot(integration_tot, reduction = "umap", cols = cols_cl_tot)
+ggsave(paste0(path, "img/host_10/fig6.png"))#, height = 8, width = 10)
+# di default umap
+DimPlot(integration_tot, group.by = "orig.ident", cols = cols_samples_tot)
+ggsave(paste0(path, "img/host_10/fig7.png"))#, height = 8, width = 10)
+#ggsave(paste0(path, "img/integration_tot_1.png"))#, height = 10, width = 10)
+```
+
+```{r, fig.width=10, fig.height=5}
+DimPlot(integration_tot, split.by = "orig.ident", ncol = 5, cols = cols_cl_tot)
+ggsave(paste0(path, "img/host_10/fig8.png"), height = 5, width = 10)
+```
+
+```{r, fig.height=10, fig.width=13, message = FALSE}
+#filtered_spatialPCA_2[["RNA"]] = JoinLayers(filtered_spatialPCA_2[["RNA"]])
+#filtered_spatialPCA_2$merged_clusters = factor(filtered_spatialPCA_2$merged_clusters, levels = names(cols_merged))
+Idents(integration_tot) = integration_tot$seurat_clusters
+markers_clusters <- FindAllMarkers(integration_tot, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)#,group.by = "my_clusters")
+saveRDS(markers_clusters, file = paste0(path, "data/markers_ctrl_infected.rds"))
+
+```
+
+```{r, fig.width=12, fig.height= 10, warning = FALSE}
+markers_clusters %>%
+  filter(p_val_adj < 0.01) %>%
+  group_by(cluster) %>%
+  top_n(n = 4, wt = avg_log2FC) -> top_markers
+  
+  #top_markers = return_markers(markers, logFC = 0.3, padj = 0.01, n = n_top) # stessa cosa
+  p1 = DoHeatmap(integration_tot, features = top_markers$gene, group.colors = cols_cl_tot, assay = "RNA") + #& NoLegend() label = FALSE) + 
+  guides(color = "none") 
+  # Warning: The following features were omitted as they were not found in the scale.data slot for the RNA assay:
+  # non si vedono perchè non fanno parte delle variableFeatures
+  # slot = counts o data non va bene tutto viola
+  p1
+  ggsave(paste0(path, "img/host_10/fig9.png"), height = 12, width = 10)
+
+```
+```{r}
+common_clusters = table(integration_tot$seurat_clusters[integration_tot$condition == "Ctrl"])
+common_clusters
+common_clusters = names(common_clusters)[common_clusters > 50]
+outliers_ctrl = colnames(integration_tot)[integration_tot$condition == "Ctrl" & !(integration_tot$seurat_clusters %in% common_clusters)]
+#integration_tot = integration_tot[ , setdiff(colnames(integration_tot), outliers_ctrl) ]
+```
+
+```{r}
+integration_tot$my_clusters = integration_tot$seurat_clusters
+ordered_cl = hierarchical_order_clusters(data = integration_tot, scale_by = "column", macro = FALSE, name = "img/host_10/pre_10a.png")
+ordered_cl_b = hierarchical_order_clusters(data = integration_tot, scale_by = "column", macro = TRUE, name = "img/host_10/pre_10b.png")
+integration_tot$my_clusters = factor(integration_tot$my_clusters, levels = ordered_cl)
+```
+
+```{r}
+
+ll = data.frame(label = ifelse(ordered_cl %in% common_clusters, "S", "I"),   # shared, infection_specific
+                cluster = ordered_cl)
+
+```
+
+```{r, message = FALSE}
+cc = composition_clusters(integration_tot, col_cl = cols_cl_tot, col_vetrini = cols_samples_tot, cl = 0:(length(unique(integration_tot$my_clusters))-1)) # ordered_cl
+cc[[1]] + geom_text(data = ll, aes(x = cluster, y = 9000, label = label), 
+            vjust = -0.5, size = 3.5, inherit.aes = FALSE)
+cc[[2]] + geom_text(data = ll, aes(x = cluster, y = 1.05, label = label), 
+            vjust = -0.5, size = 3.5, inherit.aes = FALSE) +
+  theme(axis.text.x = element_text(size = 14))
+ggsave(paste0(path, "img/host_10/fig11.png"))#, height = 12, width = 10)
+cc[[3]]
+ggsave(paste0(path, "img/host_10/fig12.png"))#, height = 12, width = 10)
+```
+```{r, fig.width=12, fig.height=4}
+integration_tot$my_clusters = integration_tot$seurat_clusters
+
+
+pp = deconv_barplots(integration_tot, cl = ordered_cl)
+pp[[1]] + geom_text(data = ll, aes(x = cluster, y = 9000, label = label), 
+            vjust = 1.2, size = 3.5, inherit.aes = FALSE)
+ggsave(paste0(path, "img/host_10/deconv_1.png"), width = 12, height = 4)
+pp[[2]]
+ggsave(paste0(path, "img/host_10/deconv_2.png"), width = 12, height = 4)
+pp[[3]]
+ggsave(paste0(path, "img/host_10/deconv_3.png"), width = 12, height = 4)
+pp[[4]]
+ggsave(paste0(path, "img/host_10/deconv_4.png"), width = 12, height = 4)
+
+
+```
+```{r}
+saveRDS(integration_tot, paste0(path, "data/integration_tot.rds"))
+#integration_tot = readRDS(paste0(path, "data/integration_tot.rds"))
+```
+
+## common clusters 
+
+```{r}
+#common_clusters = ordered_cl[ordered_cl %in% common_clusters]
+common_clusters = hierarchical_order_clusters(data = integration_tot[, integration_tot$seurat_clusters %in% common_clusters], scale_by = "column", macro = FALSE, name = "img/host_10/fig20.png")
+```
+
+```{r}
+
+median_celltypes_ctrl = order_clusters(data = integration_tot, scale_by = "column", macro = FALSE, condition = "Ctrl", name = "img/host_10/fig13.png", cl = common_clusters)
+
+median_celltypes_inf = order_clusters(data = integration_tot, scale_by = "column", macro = FALSE, condition = "Infected", name = "img/host_10/fig14.png", cl = common_clusters)
+
+pp = pheatmap::pheatmap(median_celltypes_inf - median_celltypes_ctrl, cluster_cols = FALSE, cluster_rows = FALSE, breaks = seq(-1,1,length.out=101), color = colorRampPalette(c('blue','white','red'))(100), scale = "column", fontsize_row = 12, fontsize_col = 12,  angle_col = 90, cellheight = 20, cellwidth = 20, main = "Infected-Ctrl", filename = paste0(path, "img/host_10/fig15.png"))
+
+```
+
+```{r}
+# macro
+median_celltypes_ctrl = order_clusters(data = integration_tot, scale_by = "column", macro = TRUE, condition = "Ctrl", name = "img/host_10/fig16.png", cl = common_clusters)
+
+median_celltypes_inf = order_clusters(data = integration_tot, scale_by = "column", macro = TRUE, condition = "Infected", name = "img/host_10/fig17.png", cl = common_clusters)
+
+pp = pheatmap::pheatmap(median_celltypes_inf - median_celltypes_ctrl, cluster_cols = FALSE, cluster_rows = FALSE, breaks = seq(-1,1,length.out=101), color = colorRampPalette(c('blue','white','red'))(100), scale = "column", fontsize_row = 12, fontsize_col = 12,  angle_col = 90, cellheight = 20, cellwidth = 20, main = "Infected-Ctrl", filename = paste0(path, "img/host_10/fig18.png"))
+
+```
+
+```{r, fig.height=5, warning = FALSE}
+
+for (i in 1: length(common_clusters)){
+  d = integration_tot[, integration_tot$seurat_clusters == common_clusters[i]]
+  matx0_ctrl <- t(as.matrix(d@assays$RCTD$data[, d$condition == "Ctrl"]))
+  corr_ctrl <- cor(matx0_ctrl)
+  matx0_inf <- t(as.matrix(d@assays$RCTD$data[, d$condition == "Infected"]))
+  corr_inf <- cor(matx0_inf)
+  corr_diff = corr_inf-corr_ctrl
+  corr_diff[!upper.tri(corr_diff)] = 0
+  diag(corr_diff) = 1
+  corr_ctrl[!upper.tri(corr_ctrl)] = 0
+  diag(corr_ctrl) = 1
+  cc = Heatmap(corr_ctrl,
+  row_names_side = "right",    
+  column_names_side = "top",   
+  column_names_rot = 90,      
+  width = unit(6, "cm"),       
+  height = unit(6, "cm"),
+  column_dend_side = "bottom", 
+  name = "correlation", cluster_rows = FALSE, cluster_columns = FALSE, 
+  column_title = "Ctrl", 
+  #breaks = seq(-1,1,length.out=101), 
+  col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")) )
+  cc
+  #show_heatmap_legend = FALSE
+  ii = Heatmap(corr_diff,
+  row_names_side = "right",    
+  column_names_side = "top",   
+  column_names_rot = 90,      
+  width = unit(6, "cm"),       
+  height = unit(6, "cm"),
+  column_dend_side = "bottom", 
+  name = "correlation", cluster_rows = FALSE, cluster_columns = FALSE,
+  column_title = "Infected - Ctrl", 
+  col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")))
+  
+  #print(cc + ii)
+ ht_list = cc + ii#ht1 + ht2 + ht3
+ #png(paste0(path, "img/host_10/corr_cl", common_clusters[i], ".png"), res = 60)
+draw(ht_list, ht_gap = unit(2, "cm"), column_title = paste0("Cluster ", common_clusters[i], " - Airways"))# cc + ii
+#dev.off()
+}
+
+```
+
+```{r, warining = FALSE}
+
+DEGS_density = list()
+for (i in 1: length(common_clusters)){
+  d = integration_tot[, integration_tot$seurat_clusters == common_clusters[i]]
+  table(d$condition)
+  DEGS_density[[i]] <- FindMarkers(d, group.by = "condition", ident.1 = "Infected", ident.2 = "Ctrl", assay = "RNA")
+  names(DEGS_density)[i] = common_clusters[i]
+
+}
+
+
+for (i in 1: length(common_clusters)){
+  print(make_vulcano(DEGS_density[[i]], threshold_FC = 1, threshold_padj = 0.01, title = paste0("DEGS Infected vs Ctrl - cluster ", common_clusters[i], ": log2FC 1, padj 0.01")))
+  #ggsave(paste0(path, "img/vulcano_", cl[i], ".png"))#, width = 10, height = 10)
+}
+  
+```
+
+```{r}
+
+up_reg = NULL
+down_reg = NULL
+threshold_FC = 1
+threshold_padj = 0.01
+n_down = NULL
+n_up = NULL
+
+for (i in 1:length(common_clusters)){
+  df = DEGS_density[[i]]
+  df <- df %>%
+  mutate(gene_type = case_when(avg_log2FC > threshold_FC & p_val_adj < threshold_padj ~ "up",
+                               avg_log2FC < (-threshold_FC) & p_val_adj < threshold_padj ~ "down",
+                               TRUE ~ "ns")) 
+  up = sum(df$gene_type == "up")
+  up_reg = rbind(up_reg, up)
+  n_up = rbind(n_up, rep(common_clusters[i], length(up)))
+  down = sum(df$gene_type == "down")
+down_reg = rbind(down_reg, -down)
+n_down = rbind(n_down, rep(common_clusters[i], length(down)))
+  
+}
+
+DE_num = data.frame(DE = c(up_reg, down_reg), sign = c(rep("up", length(up_reg)), rep("down", length(down_reg))), contrast = c(n_up, n_down))
+#DE_num$contrast = as.numeric(DE_num$contrast)
+#DE_num$contrast = paste0("cl_", DE_num$contrast)
+DE_num$contrast = factor(DE_num$contrast, levels = common_clusters)
+
+ggplot(data=DE_num, aes(x=contrast, y=DE, fill=sign)) +
+  geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 0, vjust = 0.8, hjust=0.85, size = 14)) +
+  scale_fill_manual(values = cols_DEGS)
+ggsave(paste0(path, "img/host_10/fig19.png"))
+
+```
+
+```{r}
+#DEGS_density[[1]]
+coords_list <- lapply(DEGS_density, function(df) {
+  data.frame(l2FC = df$avg_log2FC, row.names = rownames(df))
+})
+host_genes = read.csv(paste0(path, "/data/host_genes.csv"))[[1]]
+#length(host_genes)
+total_genes <- Reduce(union, coords_list)
+
+tot_genes  = lapply(coords_list, function(x) { data.frame(l2FC = ifelse(host_genes %in% rownames(x), x[host_genes, "l2FC"], NA), row.names = host_genes)})
+df_coords <- do.call(cbind, tot_genes)
+colnames(df_coords) = c(paste0("cl_", common_clusters))
+
+```
+
+```{r}
+corr <- cor(df_coords, use = "pairwise.complete.obs")
+dim(corr)
+min(corr)
+max(corr)
+corr[!upper.tri(corr)] = 0
+diag(corr) = 1
+#pheatmap::pheatmap(corr, cluster_cols = FALSE, cluster_rows = FALSE, breaks = seq(0.25,1,length.out=101), color = colorRampPalette(c('white','red'))(100), border_color = NA)#,filename = paste0('/beegfs/scratch/ric.hsr/Gaia_saldarini/mouse_2/images/', save_file, '.png'), height = 5, width = 5)
+
+ Heatmap(corr,
+  row_names_side = "right",    
+  column_names_side = "top",   
+  column_names_rot = 90,      
+  width = unit(6, "cm"),       
+  height = unit(6, "cm"),
+  column_dend_side = "bottom", 
+  name = "correlation", cluster_rows = FALSE, cluster_columns = FALSE, 
+  column_title = "Ctrl", 
+  col = colorRamp2(c(0.25, 1), c("white", "red")))
+```
+
+
+
+
+```{r, fig.height=6, fig.width = 8}
+# ORA ENRICHMENT UP E DOWN
+
+#cl = sort(unique(integration_tot$seurat_clusters))
+# per scegliere threshold
+#DEGS_density = split(markers_clusters, markers_clusters$cluster)
+lapply(DEGS_density, function(df) {
+  mm = return_valid_markers(df, logFC = 2.5, padj = 1e-2, type = "up")
+  dim(mm)[1]
+})
+
+
+valid_markers_up = lapply(DEGS_density, function(df) {
+  mm = return_valid_markers(df, logFC = 2.5, padj = 1e-2, type = "up")
+  rownames(mm)
+  
+})
+
+lapply(DEGS_density, function(df) {
+  mm = return_valid_markers(df, logFC = -1.5, padj = 1e-2, type = "down")
+  dim(mm)[1]
+})
+
+
+valid_markers_down = lapply(DEGS_density, function(df) {
+  mm = return_valid_markers(df, logFC = -1.5, padj = 1e-2, type = "down")
+  rownames(mm)
+  
+})
+
+names(valid_markers_up) = common_clusters
+names(valid_markers_down) = common_clusters
+lengths(valid_markers_up)
+lengths(valid_markers_down)
+
+ego_up = ORA_enrich(valid_markers_up)
+ego_up[[2]]
+dotplot(ego_up[[1]], showCategory=8, label_format = 50) + theme(axis.text.y = element_text(size = 10), axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5)) #+ ggtitle(title_ora)
+ggsave(paste0(path, "img/host_10/DEG_up.png"), height = 6, width = 8)
+
+ego_down = ORA_enrich(valid_markers_down)
+ego_down[[2]] + theme(axis.text.y = element_text(size = 10))
+dotplot(ego_down[[1]], showCategory=8, label_format = 70) + theme(axis.text.y = element_text(size = 10), axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5)) #+ ggtitle(title_ora)
+ggsave(paste0(path, "img/host_10/DEG_down.png"), height = 6, width = 8)
+
+```
+

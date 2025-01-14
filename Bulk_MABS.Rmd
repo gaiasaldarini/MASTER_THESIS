@@ -1,0 +1,604 @@
+---
+title: "BULK_new"
+author: "Gaia Saldarini"
+date: "2024-10-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+library(DESeq2)
+library(pheatmap)
+library("RColorBrewer")
+library(clusterProfiler)
+library(ggplot2)
+library(WGCNA)
+package.version("WGCNA")
+```
+
+## DATA
+
+```{r}
+# CONTE IN 2 DATASET DIVERSI 
+
+cts_abs = read.csv("/Users/salga/Desktop/BULK/GSE163621_se_abs.csv", sep = ";")
+cts_tig = read.csv("/Users/salga/Desktop/BULK/GSE163621_se_TIG.csv", sep = ";")
+coldata = read.table("/Users/salga/Desktop/BULK/SraRunTable.txt", sep = ",", header = TRUE)
+
+#cts_abs
+#cts_tig
+#head(coldata)
+
+#length(unique(cts_abs$X)) == dim(cts_abs)[1]
+#length(unique(cts_tig$X)) == dim(cts_tig)[1]
+
+dim(cts_abs)
+cts_abs = cts_abs[! (cts_abs$X == "" | is.na(cts_abs$X)), ]
+dim(cts_abs)
+rownames(cts_abs) = cts_abs$X
+cts_abs$X = NULL
+```
+
+```{r}
+dim(cts_tig)
+cts_tig = cts_tig[! (cts_tig$X == "" | is.na(cts_tig$X)), ]
+dim(cts_tig)
+rownames(cts_tig) = cts_tig$X
+cts_tig$X = NULL
+```
+
+```{r}
+tab = read.table("/Users/salga/Desktop/BULK/tab.txt", header = FALSE, row.names = 1)
+```
+
+```{r}
+coldata$sample = tab[coldata$GEO_Accession..exp., ]
+#coldata
+```
+```{r}
+counts_tot = merge(cts_abs, cts_tig, by=0)
+rownames(counts_tot) = counts_tot$Row.names
+counts_tot$Row.names = NULL
+dim(counts_tot)
+rnames = rownames(counts_tot)
+counts_tot = as.data.frame(sapply(counts_tot, as.numeric))
+rownames(counts_tot) = rnames
+counts_tot[1:5, 1:5]
+```
+
+```{r}
+dim(counts_tot)
+dim(coldata)
+```
+
+```{r}
+coldata$cmatrix = ifelse(coldata$sample %in% colnames(cts_abs), "abs", "tig")
+coldata$treatment = gsub(" ", "_", coldata$treatment)
+coldata$time = gsub(" ", "_", coldata$time)
+
+table(coldata$cmatrix)
+table(coldata$treatment)
+# treatment è quello per cui divido il design
+table(coldata$time)
+
+rownames(coldata) = coldata$sample
+coldata = coldata[colnames(counts_tot), ]
+all(colnames(counts_tot) == coldata$sample)
+```
+```{r}
+GO_ATCC_df <- read.csv('/Users/salga/Desktop/BULK/GO_ATCC.csv')
+
+# si può decidere se arricchire i termini (più specifici) oppure
+# le categorie (più generali)
+GO_ATCC_TERM <- GO_ATCC_df[,c('TERM','GENE')]
+GO_ATCC_CATEGORY <- GO_ATCC_df[,c('CATEGORY','GENE')]
+
+head(GO_ATCC_df)
+head(GO_ATCC_TERM)
+head(GO_ATCC_CATEGORY)
+
+length(unique(GO_ATCC_df$GENE))
+length(unique(GO_ATCC_df$GENE))/length(rownames(cts_tig))
+table(GO_ATCC_df$CATEGORY)
+length(unique(GO_ATCC_df$TERM))
+length(unique(GO_ATCC_df$GENE[GO_ATCC_df$GENE %in% rownames(cts_tig)]))
+cat(unique(GO_ATCC_CATEGORY$CATEGORY), sep = "\n")
+
+```
+
+
+## ANALYSIS
+
+```{r}
+dim(counts_tot)
+dds <- DESeqDataSetFromMatrix(countData = counts_tot,
+                              colData = coldata,
+                              design= ~ time + treatment)
+
+#resultsNames(dds) # lists the coefficients
+#res <- results(dds, name="condition_trt_vs_untrt")
+# or to shrink log fold changes association with condition:
+#res <- lfcShrink(dds, coef="condition_trt_vs_untrt", type="apeglm")
+```
+```{r}
+design(dds)
+```
+
+```{r}
+smallestGroupSize <- 6
+keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
+length(keep)
+dds <- dds[keep,]
+```
+
+```{r}
+dds$treatment <- relevel(dds$treatment, ref = "Growth_Control")
+```
+
+```{r}
+dds <- DESeq(dds)
+resultsNames(dds)
+
+```
+
+
+```{r}
+my_colors = c("red3", "blue3")
+names(my_colors) = c("4_hours", "24_hours")
+palette = brewer.pal(10, 'Set3')
+tret_col = palette[1:7]
+names(tret_col) = c("Growth_Control", "Tigecycline", "Amikacin", "Cefoxitin", "Clarithromycin", "Clofazimine", "Growth_Control_7H9")
+my_colors = list(time = my_colors, treatment = tret_col)
+
+df <- as.data.frame(colData(dds)[,c("time","treatment")])
+
+# in annotation_colors = my_colors
+
+```
+
+```{r}
+vsd <- vst(dds, blind=FALSE)
+vsd
+# per visualizzazione vsd, per analisi dds
+```
+
+```{r, fig.height = 10, fig.width = 10}
+dim(assay(vsd))
+pheatmap(assay(vsd), cluster_rows=TRUE, show_rownames=FALSE,
+         cluster_cols=TRUE, annotation_col=df, scale = "row", annotation_colors = my_colors)
+```
+## rpoB Lsr2
+
+lsr2: MAB_0545
+rpoB: MAB_3869c
+
+```{r}
+norm_counts = counts(dds, normalized = TRUE)
+ctrl_4 = coldata$sample[coldata$treatment == "Growth_Control" & coldata$time == "4_hours"]
+ctrl_4 = norm_counts[, colnames(norm_counts) %in% ctrl_4]
+#ctrl_4 = as.numeric(ctrl_4)
+
+most_expressed = rownames(ctrl_4)[order(rowSums(ctrl_4), decreasing = TRUE)]
+
+
+which(most_expressed == "MAB_0545")   
+which(most_expressed == "MAB_3869c")  
+
+order(rowSums(ctrl_4), decreasing = TRUE)[12] / order(rowSums(ctrl_4), decreasing = TRUE)[143]
+```
+## DEG ANALYSIS
+
+```{r, fig.width = 10}
+boxplot(log10(counts(dds, normalized = FALSE)), col = palette[1:7], outline = FALSE, ann = FALSE, las = 2)#, range=0, las=2)  # las = 2 orizzontale
+legend(x = "topright", legend = c("Growth_Control", "Tigecycline", "Amikacin", "Cefoxitin", "Clarithromycin", "Clofazimine", "Growth_Control_7H9"), fill = palette[1:7])
+#ggsave("/Users/salga/Desktop/BULK/IMMAGINI/pre.png")
+boxplot(log10(counts(dds, normalized = TRUE)), outline = FALSE, col = palette[1:7])
+legend(x = "topright", legend = c("Growth_Control", "Tigecycline", "Amikacin", "Cefoxitin", "Clarithromycin", "Clofazimine", "Growth_Control_7H9"), fill = palette[1:7])
+#Savage("/Users/salga/Desktop/BULK/IMMAGINI/after.png")
+```
+
+
+```{r}
+plotDispEsts(dds)
+```
+
+
+```{r}
+sampleDists <- dist(t(assay(vsd)))
+```
+
+```{r, fig.width=8, fig.height=8}
+
+sampleDistMatrix <- as.matrix(sampleDists)
+
+rownames(sampleDistMatrix) <- paste(vsd$treatment, vsd$type, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+
+rownames(sampleDistMatrix) <- paste(vsd$time, vsd$type, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+```
+
+
+```{r}
+plotPCA(vsd, intgroup="treatment")#, "time"))
+plotPCA(vsd, intgroup="time")#, "time"))
+plotPCA(vsd, intgroup= c("treatment", "time"))
+plotPCA(vsd, intgroup= "cmatrix")
+```
+cmatrix non influisce, perciò non la uso come variabile per costruire il modello che spiega la varianza
+
+il modello è unico, poi seleziono con contrast i confronti che voglio fare, 1 a 1
+
+```{r}
+cont = resultsNames(dds)
+res = list()
+for (i in 2:length(cont)){
+  res[[i-1]] = results(dds, name = cont[i])   # contrast=c("condition","treated","untreated")
+  names(res)[i-1] = cont[i]
+}
+
+res
+```
+
+
+```{r}
+resOrdered = list()
+for (i in 1:length(res)){
+  resOrdered[[i]] <- res[[i]][order(res[[i]]$pvalue),]
+  print(names(res)[i])
+  summary(res[[i]])
+}
+
+```
+
+```{r}
+up_reg = NULL
+down_reg = NULL
+
+for (i in 1:length(res)){
+  up_reg = rbind(up_reg, sum(res[[i]]$log2FoldChange > 1 & res[[i]]$padj < 0.05))
+down_reg = rbind(down_reg, -sum(res[[i]]$log2FoldChange < (-1) & res[[i]]$padj < 0.05))
+  
+}
+
+DE_num = data.frame(DE = c(up_reg, down_reg), sign = c(rep("up", length(res)), rep("down", length(res))), contrast = rep(names(res), 2))
+```
+
+```{r}
+names(res)
+```
+
+```{r}
+ggplot(data=DE_num, aes(x=contrast, y=DE, fill=sign)) +
+  geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 30, vjust = 0.8, hjust=0.85))
+```
+vulcano plot?
+
+
+```{r}
+# rpoB
+lapply(res, function(x) x['MAB_3869c',])
+plotCounts(dds, 'MAB_3869c', intgroup = 'treatment', )
+```
+
+```{r, fig.width = 12, fig.height = 7}
+# lsr2
+lapply(res, function(x) x['MAB_0545',])
+plotCounts(dds, 'MAB_0545', intgroup = 'treatment')
+```
+
+```{r}
+contrasts = c("treatment_Amikacin_vs_Growth_Control", "treatment_Cefoxitin_vs_Growth_Control" , "treatment_Clarithromycin_vs_Growth_Control", "treatment_Clofazimine_vs_Growth_Control", "treatment_Growth_Control_7H9_vs_Growth_Control", "treatment_Tigecycline_vs_Growth_Control")
+valid_up = NULL
+valid_down = NULL
+non_valid = NULL
+
+for (i in 1:length(contrasts)){
+  xx = res[[contrasts[i]]]
+  xx$gene = rownames(xx)
+  rownames(xx) = NULL
+  
+  df_up = xx[xx$log2FoldChange > 1 & xx$padj < 0.05, ]
+  df_up$cfr = contrasts[i]
+  valid_up = rbind(valid_up, df_up)
+  
+  df_down = xx[xx$log2FoldChange < (-1) & xx$padj < 0.05, ]
+  df_down$cfr = contrasts[i]
+  valid_down = rbind(valid_down, df_down)
+  
+  df_non = xx[xx$log2FoldChange > (-0.4) & xx$log2FoldChange < 0.4 & xx$padj > 0.5, ]
+  df_non$cfr = contrasts[i]
+  non_valid = rbind(non_valid, df_non)
+}
+
+```
+
+```{r}
+valid_up[valid_up$gene == "MAB_3869c", ]
+valid_up[valid_up$gene == "MAB_0545", ]
+```
+
+
+## WGCNA
+
+```{r}
+dataExpr = t(assay(dds))
+dim(dataExpr)
+dataExpr[1:5,1:5]
+# on rows 134 samples, on columns 3600 genes
+
+# obtain the adjacency matrix: need beta value(power)
+# find optimal value for beta according to if they fit the scale free topology
+
+# set of possible values for beta among which to choose:
+powers = c(c(1:10), seq(from=12, to=30, by= 2)) # da q a 10 + da 12 a 20 ogni 2 (even numbers)
+length(powers)
+sft= pickSoftThreshold(dataExpr, powerVector=powers, verbose=5)
+# calcola connectivity 
+sft$fitIndices
+
+sizeGrWindow(9,5)
+par(mfrow=c(1,2))
+cex1 =0.9
+
+plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2], # slope in 3 column
+     xlab= "Soft Threshold (power)", ylab= "Signed R^2", type="n", main = "Scale independence")
+# type = n. it doesn't generate any plot, just the axis
+# signed R squared
+text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     labels= powers, cex=cex1, col="red")
+abline(h=0.9, col="red")
+
+plot(sft$fitIndices[,1], sft$fitIndices[,5], xlab="Soft threshold (power)",
+     ylab = "Mean connectivity", type="n", main = "Mean connectivity")
+# 5 column: mean connectivity
+text(sft$fitIndices[,1], sft$fitIndices[,5], labels= powers,
+     cex=cex1, col="red")
+
+# --> the smallest beta value that satifies our threshold is 6
+# on the right as it becomes more similar to a scale free network, the mean connectivity drops
+
+
+# construct adjacency matrix: correlation values for each pair of genes in the network
+softPower= 26
+adjacency = adjacency(dataExpr, power=softPower)
+# da expression matrix con rows = samples and columns = genes,
+# computes a correlation matrix (by default pearson, 
+# o comuqnue qualsiasi altra che dia valori tra -1 e 1)
+# e poi eleva al power --> così ottengo power adjacency function
+
+# identify modules = areas in the network very connected inside
+# clustering: need a distance measure: topological overlap measure of similarity
+# between each pair of genes
+
+TOM = TOMsimilarity(adjacency)
+dissTOM = 1- TOM
+
+# hierarchical clustering of the genes in the dataset
+
+geneTree = hclust(as.dist(dissTOM), method="average")
+
+sizeGrWindow(12, 9) 
+plot(geneTree, xlab="", sub="", main = "Gene Clustering", labels=FALSE) # empty title
+
+
+# to obtain modules need a threshold to cut the tree--> dynamic cut
+minModuleSize = 50 # modules are defined as larger than 30
+dynamicMods = cutreeDynamic(dendro=geneTree, distM = dissTOM, deepSplit = 2, 
+                            pamRespectsDendro = FALSE, minClusterSize = minModuleSize) 
+# to not add modules to branches
+
+# --> each gene assigned to a module
+table(dynamicMods)
+# 22 modules. "0" : 88 genes not assigned to any module
+# the smallest module is made of 34 genes--> our threshold of 30 is respected
+
+# assign one color to each module
+
+dynamicColors = labels2colors(dynamicMods)
+table(dynamicColors)
+# instead of number of the module, the label is the colour!
+
+sizeGrWindow(8,6)
+plotDendroAndColors(geneTree, dynamicColors, "Dynamic Tree Cut", 
+                    dendroLabels = FALSE, addGuide = TRUE, guideHang = 0.05,
+                    main = "Gene dendrogram and module colors")
+
+```
+```{r}
+#table(dynamicMods)
+#dynamicMods
+#dynamicColors
+
+length(colnames(dataExpr)) == length(dynamicMods)
+names(dynamicMods) = colnames(dataExpr)
+names(dynamicColors) = colnames(dataExpr)
+
+length(unique(dynamicColors))
+
+```
+
+```{r}
+all(colnames(dataExpr) == names(dynamicMods))
+order_genes = colnames(dataExpr)[geneTree$order]
+table(dynamicColors)
+length(unique(dynamicColors))
+```
+```{r}
+df_rows = as.data.frame(dynamicMods)
+colnames(df_rows) = "module"
+df_rows$module = as.factor(df_rows$module)
+cc = data.frame(cols = dynamicColors, mod = dynamicMods)
+cc = unique(cc[, c("cols", "mod")])
+cols_modules = cc$cols
+names(cols_modules) = cc$mod
+```
+
+```{r, fig.height = 12, fig.width = 10}
+cols_modules = cols_modules[order(as.numeric(names(cols_modules)))]
+my_colors[["module"]] = cols_modules
+dim(df_rows)[1] == dim(vsd)[1]
+pheatmap(assay(vsd)[order_genes, ], cluster_rows=FALSE, show_rownames=FALSE, show_colnames = FALSE,
+         cluster_cols=TRUE, annotation_col=df, scale = "row", annotation_row = df_rows, annotation_colors = my_colors) + theme(legend.text = element_text(size = 14))
+```
+
+```{r}
+dynamicMods["MAB_0545"]
+col_lsr2 = dynamicColors["MAB_0545"]
+module_lsr2 = names(dynamicMods)[dynamicMods == dynamicMods["MAB_0545"]]
+length(module_lsr2)
+```
+
+```{r}
+dynamicMods["MAB_3869c"]
+col_rpoB = dynamicColors["MAB_3869c"]
+module_rpoB = names(dynamicMods)[dynamicMods == dynamicMods["MAB_3869c"]]
+length(module_rpoB)
+```
+
+```{r}
+
+dynamicColors = rep("grey", length(dynamicMods))
+dynamicColors[dynamicMods == unname(dynamicMods["MAB_3869c"])] = col_rpoB
+dynamicColors[dynamicMods == dynamicMods["MAB_0545"]] = col_lsr2
+
+table(dynamicColors)
+# instead of number of the module, the label is the colour!
+
+sizeGrWindow(8,6)
+plotDendroAndColors(geneTree, dynamicColors, "Dynamic Tree Cut", 
+                    dendroLabels = FALSE, addGuide = TRUE, guideHang = 0.05,
+                    main = "Gene dendrogram and module colors")
+
+```
+
+```{r}
+GO_ATCC_TERM
+length(unique(GO_ATCC_TERM$TERM))
+length(unique(GO_ATCC_TERM$GENE))
+length(unique(GO_ATCC_df$CATEGORY))
+cat = unique(GO_ATCC_df$CATEGORY)
+cat
+
+ll = NULL
+for (i in 1:10){
+  ll[i] = length(unique(GO_ATCC_df$TERM[GO_ATCC_df$CATEGORY == cat[i]]))
+}
+names(ll) = cat
+sum(ll) == length(unique(GO_ATCC_TERM$TERM))
+
+ll = as.data.frame(ll)
+colnames(ll) = "# terms"
+ll
+```
+
+```{r, fig.height=6, fig.width=8}
+
+valid_markers_base = list(rpoB_module = module_rpoB, lsr2_module = module_lsr2)
+GO_ATCC_TERM$TERM = substr(GO_ATCC_TERM$TERM, 1, nchar(GO_ATCC_TERM$TERM) -12)
+ego_markers <- compareCluster(geneClusters = valid_markers_base, fun = "enricher", TERM2GENE = GO_ATCC_TERM, 
+                 pvalueCutoff = 1, qvalueCutoff = 1, 
+                 pAdjustMethod = 'none')
+
+
+dotplot(ego_markers, showCategory=10, label_format = 70) #+ theme(axis.text.y = element_text(size = 9), axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5)) #+ ggtitle(title_ora)
+
+```
+
+
+
+```{r, fig.heigth = 10, fig.width = 10}
+h = pheatmap(assay(vsd)[module_lsr2,], cluster_rows=TRUE, show_rownames=FALSE,
+         cluster_cols=TRUE, annotation_col=df)
+```
+
+```{r, fig.heigth = 10, fig.width = 10}
+h = pheatmap(assay(vsd)[module_rpoB,], cluster_rows=TRUE, show_rownames=FALSE,
+         cluster_cols=TRUE, annotation_col=df)
+```
+
+```{r, fig.heigth = 10, fig.width = 10}
+df_rows = data.frame(gene = c(rep("rpoB", length(module_rpoB)), rep("lsr2", length(module_lsr2))), row.names = c(module_rpoB, module_lsr2))
+cols_genes = c("purple", "yellow")
+names(cols_genes) = c("lsr2", "rpoB")
+ann_col = list(gene = cols_genes)
+h = pheatmap(assay(vsd)[c(module_rpoB, module_lsr2),], cluster_rows=FALSE, show_rownames=FALSE, scale = "row",
+         cluster_cols=TRUE, annotation_col=df, annotation_row = df_rows, annotation_colors = ann_col)
+```
+
+```{r, fig.height=6, fig.width=8}
+
+valid_markers_base = list(rpoB_module = module_rpoB, lsr2_module = module_lsr2)
+
+ego_markers <- compareCluster(geneClusters = valid_markers_base, fun = "enricher", TERM2GENE = GO_ATCC_TERM, 
+                 pvalueCutoff = 1, qvalueCutoff = 1, 
+                 pAdjustMethod = 'none')
+
+
+dotplot(ego_markers, showCategory=20, label_format = 70) #+ theme(axis.text.y = element_text(size = 9), axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5)) #+ ggtitle(title_ora)
+
+```
+
+```{r}
+my_genes <- module_lsr2 #sample(GO_ATCC_df$GENE, 20)
+(sum(my_genes %in% GO_ATCC_df$GENE)) * 100/length(my_genes)
+
+# arricchimento dei termini (TERM)
+dotplot(enricher(my_genes, TERM2GENE = GO_ATCC_TERM, 
+                 pvalueCutoff = 1, qvalueCutoff = 1, 
+                 pAdjustMethod = 'none'))
+
+# arricchimento delle categorie (CATEGORY)
+dotplot(enricher(my_genes, TERM2GENE = GO_ATCC_CATEGORY, 
+                 pvalueCutoff = 1, qvalueCutoff = 1, 
+                 pAdjustMethod = 'none'))
+```
+
+```{r}
+my_genes <- module_rpoB #sample(GO_ATCC_df$GENE, 20)
+(sum(my_genes %in% GO_ATCC_df$GENE)) * 100/length(my_genes)
+#dotplot(enricher(my_genes, TERM2GENE = GO_ATCC_df, pvalueCutoff = 1, qvalueCutoff = 1, pAdjustMethod = 'none'))
+
+# arricchimento dei termini (TERM)
+dotplot(enricher(my_genes, TERM2GENE = GO_ATCC_TERM, 
+                 pvalueCutoff = 1, qvalueCutoff = 1, 
+                 pAdjustMethod = 'none'))
+
+# arricchimento delle categorie (CATEGORY)
+dotplot(enricher(my_genes, TERM2GENE = GO_ATCC_CATEGORY, 
+                 pvalueCutoff = 1, qvalueCutoff = 1, 
+                 pAdjustMethod = 'none'))
+```
+
+```{r}
+#module_lsr2
+module_ordered = module_lsr2[h$tree_row$order]
+which(module_ordered == "MAB_0545")
+length(module_ordered)
+
+#cbind(assay(vsd)[module_lsr2,],cluster = cutree(h$tree_row, k = 10))
+
+table(cutree(h$tree_row, k = 5))
+
+cutree(h$tree_row, k = 5)[which(module_lsr2 == "MAB_0545")]
+
+
+module_lsr2[cutree(h$tree_row, k = 5) ==4]
+```
+
+
+
+
