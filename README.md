@@ -3,17 +3,13 @@ COSR - IRCCS San Raffaele
 
 R code for master thesis analyses of spatial transcriptomic data (Visium)
 
-R scripts:
-- deconvolution_RCTD.R
-- SpatialPCA_dimred.R
-
-html:
-- Quality (host + pathogen)
-- Ctrl vs Infected comparison
-- Deconvolution general results
-- 3D spatially aware pipeline
-- Infected domains & results
-- Comparison SC-like vs 3D spatially aware workflows
-- Granulomas-like structures
-- Pathogen analysis
+Rmd scripts:
+1. Quality.Rmd
+2. Ctrl_Infected.Rmd
+3. Deconvolution.Rmd
+4. 3D_workflow.Rmd
+5. SC_vs_3D_workflow.Rmd
+6. Granuloma.Rmd
+7. Bulk_MABS.Rmd
+8. Pathogen.Rmd
   
