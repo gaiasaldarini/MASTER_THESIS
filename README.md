@@ -1,6 +1,6 @@
 # MASTER_THESIS
-Master degree in Bioinformatics for computational genomics, Università degli studi di Milano, Politecnico di Milano
-Internship at COSR - IRCCS San Raffaele
+## Master degree in Bioinformatics for computational genomics, Università degli studi di Milano, Politecnico di Milano
+## Internship at COSR - IRCCS San Raffaele
 
 Rmd scripts for analyses of spatial transcriptomic data (Visium):
 1. Quality.Rmd: data import, quality filters (spots/genes/mt), beads identification, MABS info as covariates in Seurat object, RCTD deconvolution pipeline
